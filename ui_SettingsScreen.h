@@ -20,10 +20,10 @@ extern lv_obj_t *ui_Container9;
 extern lv_obj_t *ui_Label8;
 extern lv_obj_t *ui_Image5;
 extern lv_obj_t *ui_Bar4;
-
-// CUSTOM VARIABLES
 extern lv_obj_t *ui_BtnBack;
 extern lv_obj_t *ui_LabelBack;
+
+// Panels
 extern lv_obj_t *ui_PanelEnergy;
 extern lv_obj_t *ui_PanelDebug;
 extern lv_obj_t *ui_PanelWifi;

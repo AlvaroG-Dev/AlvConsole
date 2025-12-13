@@ -89,120 +89,102 @@ void back_to_home(lv_event_t *e) {
 }
 
 void poweroff_console(lv_event_t *e) {
-  // 1. Si ya existe el menú, cerrarlo
   if (energy_menu) {
     lv_obj_del(energy_menu);
     energy_menu = NULL;
     return;
   }
 
-  // 2. Contenedor principal modal (semi-transparente fondo)
-  // Usamos una capa completa para bloquear clics fuera
-  lv_obj_t *overlay = lv_obj_create(lv_scr_act());
-  lv_obj_set_size(overlay, 480, 320);
-  lv_obj_set_style_bg_color(overlay, lv_color_black(), 0);
-  lv_obj_set_style_bg_opa(overlay, LV_OPA_50, 0);
-  lv_obj_clear_flag(overlay, LV_OBJ_FLAG_SCROLLABLE);
-
-  // Guardamos el overlay como el handle principal para poder borrarlo luego
-  // (O podemos hacerlo hijo del energy_menu si preferimos, pero aqui
-  // energy_menu será la ventana) Para simplificar con tu lógica existente,
-  // energy_menu será la VENTANA y el overlay será su padre o simplemente
-  // hacemos la ventana modal directa. Vamos a seguir tu patrón: energy_menu es
-  // la ventana flotante.
-
-  // Borramos el overlay temporal porque vamos a usar energy_menu como la
-  // ventana centrada directamente
-  lv_obj_del(overlay);
-
-  // --- VENTANA PRINCIPAL ---
+  /* ---------- CONTENEDOR ---------- */
   energy_menu = lv_obj_create(lv_scr_act());
-  lv_obj_set_size(energy_menu, 420, 200);
+  lv_obj_set_size(energy_menu, 440, 180);
   lv_obj_center(energy_menu);
-
-  // Estilo Glassmorphism / Dark Modern
-  lv_obj_set_style_bg_color(energy_menu, lv_color_hex(0x1F1F1F), 0);
-  lv_obj_set_style_bg_opa(energy_menu, LV_OPA_90,
-                          0); // Ligeramente transparente
-  lv_obj_set_style_border_color(energy_menu, lv_color_hex(0x444444), 0);
+  lv_obj_set_style_bg_color(energy_menu, lv_color_hex(0x2B2B2B), 0);
+  lv_obj_set_style_bg_opa(energy_menu, LV_OPA_COVER, 0);
+  lv_obj_set_style_radius(energy_menu, 18, 0);
   lv_obj_set_style_border_width(energy_menu, 2, 0);
-  lv_obj_set_style_radius(energy_menu, 16, 0);
-  lv_obj_set_style_shadow_width(energy_menu, 40, 0);
-  lv_obj_set_style_shadow_color(energy_menu, lv_color_black(), 0);
-  lv_obj_set_style_shadow_opa(energy_menu, LV_OPA_50, 0);
-  lv_obj_clear_flag(energy_menu, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_style_border_color(energy_menu, lv_color_hex(0x606060), 0);
+  lv_obj_set_style_pad_all(energy_menu, 12, 0);
 
-  // --- TÍTULO ---
+  /* ---------- TÍTULO ---------- */
   lv_obj_t *title = lv_label_create(energy_menu);
-  lv_label_set_text(title, "MENU DE ENERGIA");
-  lv_obj_set_style_text_font(title, &ui_font_RobotoMedium18,
-                             0); // Fuente más grande si posible
-  lv_obj_set_style_text_color(title, lv_color_hex(0xFFFFFF), 0);
-  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 5);
+  lv_label_set_text(title, "OPCIONES DE ENERGIA");
+  lv_obj_set_style_text_font(title, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_color(title, lv_color_white(), 0);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 6);
 
-  // --- CONTENEDOR DE BOTONES (Horizontal Flex) ---
-  lv_obj_t *btn_cont = lv_obj_create(energy_menu);
-  lv_obj_set_size(btn_cont, 380, 80);
-  lv_obj_align(btn_cont, LV_ALIGN_CENTER, 0, 0);
-  lv_obj_set_style_bg_opa(btn_cont, LV_OPA_TRANSP, 0);
-  lv_obj_set_style_border_width(btn_cont, 0, 0);
-  lv_obj_set_flex_flow(btn_cont, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(btn_cont, LV_FLEX_ALIGN_SPACE_BETWEEN,
-                        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-  lv_obj_clear_flag(btn_cont, LV_OBJ_FLAG_SCROLLABLE);
+  /* ---------- PARÁMETROS ---------- */
+  int btn_w = 120;
+  int btn_h = 44;
+  int spacing = 14;
+  int total_w = (btn_w * 3) + (spacing * 2);
+  int start_x = -total_w / 2 + btn_w / 2;
 
-  // --- BOTÓN 1: SUSPENDER ---
-  energy_btn_suspend = lv_btn_create(btn_cont);
-  lv_obj_set_size(energy_btn_suspend, 110, 60);
-  lv_obj_set_style_bg_color(energy_btn_suspend, lv_color_hex(0x2C3E50),
-                            0); // Azul oscuro
+  /* ---------- BOTÓN: SUSPENDER ---------- */
+  energy_btn_suspend = lv_btn_create(energy_menu);
+  lv_obj_set_size(energy_btn_suspend, btn_w, btn_h);
+  lv_obj_align(energy_btn_suspend, LV_ALIGN_CENTER, start_x, 10);
+  lv_obj_set_style_bg_color(energy_btn_suspend, lv_color_hex(0x3E3E3E), 0);
   lv_obj_set_style_radius(energy_btn_suspend, 12, 0);
+  lv_obj_set_style_shadow_width(energy_btn_suspend, 12, 0);
+  lv_obj_set_style_shadow_opa(energy_btn_suspend, LV_OPA_30, 0);
   lv_obj_add_event_cb(energy_btn_suspend, energy_btn_cb, LV_EVENT_CLICKED,
                       NULL);
 
-  lv_obj_t *lbl1 = lv_label_create(energy_btn_suspend);
-  lv_label_set_text(lbl1, "Sleep");
-  lv_obj_set_style_text_align(lbl1, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_center(lbl1);
+  lv_obj_t *lbl_suspend = lv_label_create(energy_btn_suspend);
+  lv_label_set_text(lbl_suspend, "Suspender");
+  lv_obj_set_style_text_font(lbl_suspend, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(lbl_suspend, lv_color_white(), 0);
+  lv_obj_center(lbl_suspend);
 
-  // --- BOTÓN 2: REINICIAR ---
-  energy_btn_restart = lv_btn_create(btn_cont);
-  lv_obj_set_size(energy_btn_restart, 110, 60);
-  lv_obj_set_style_bg_color(energy_btn_restart, lv_color_hex(0xD35400),
-                            0); // Naranja
+  /* ---------- BOTÓN: REINICIAR ---------- */
+  energy_btn_restart = lv_btn_create(energy_menu);
+  lv_obj_set_size(energy_btn_restart, btn_w, btn_h);
+  lv_obj_align(energy_btn_restart, LV_ALIGN_CENTER, start_x + (btn_w + spacing),
+               10);
+  lv_obj_set_style_bg_color(energy_btn_restart, lv_color_hex(0x3E3E3E), 0);
   lv_obj_set_style_radius(energy_btn_restart, 12, 0);
+  lv_obj_set_style_shadow_width(energy_btn_restart, 12, 0);
+  lv_obj_set_style_shadow_opa(energy_btn_restart, LV_OPA_30, 0);
   lv_obj_add_event_cb(energy_btn_restart, energy_btn_cb, LV_EVENT_CLICKED,
                       NULL);
 
-  lv_obj_t *lbl2 = lv_label_create(energy_btn_restart);
-  lv_label_set_text(lbl2, "Reset");
-  lv_obj_set_style_text_align(lbl2, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_center(lbl2);
+  lv_obj_t *lbl_restart = lv_label_create(energy_btn_restart);
+  lv_label_set_text(lbl_restart, "Reiniciar");
+  lv_obj_set_style_text_font(lbl_restart, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(lbl_restart, lv_color_white(), 0);
+  lv_obj_center(lbl_restart);
 
-  // --- BOTÓN 3: APAGAR ---
-  energy_btn_shutdown = lv_btn_create(btn_cont);
-  lv_obj_set_size(energy_btn_shutdown, 110, 60);
-  lv_obj_set_style_bg_color(energy_btn_shutdown, lv_color_hex(0xC0392B),
-                            0); // Rojo
+  /* ---------- BOTÓN: APAGAR ---------- */
+  energy_btn_shutdown = lv_btn_create(energy_menu);
+  lv_obj_set_size(energy_btn_shutdown, btn_w, btn_h);
+  lv_obj_align(energy_btn_shutdown, LV_ALIGN_CENTER,
+               start_x + 2 * (btn_w + spacing), 10);
+  lv_obj_set_style_bg_color(energy_btn_shutdown, lv_color_hex(0x8A2A2A), 0);
   lv_obj_set_style_radius(energy_btn_shutdown, 12, 0);
+  lv_obj_set_style_shadow_width(energy_btn_shutdown, 16, 0);
+  lv_obj_set_style_shadow_opa(energy_btn_shutdown, LV_OPA_40, 0);
   lv_obj_add_event_cb(energy_btn_shutdown, energy_btn_cb, LV_EVENT_CLICKED,
                       NULL);
 
-  lv_obj_t *lbl3 = lv_label_create(energy_btn_shutdown);
-  lv_label_set_text(lbl3, "Off");
-  lv_obj_set_style_text_align(lbl3, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_center(lbl3);
+  lv_obj_t *lbl_shutdown = lv_label_create(energy_btn_shutdown);
+  lv_label_set_text(lbl_shutdown, "Apagar");
+  lv_obj_set_style_text_font(lbl_shutdown, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(lbl_shutdown, lv_color_white(), 0);
+  lv_obj_center(lbl_shutdown);
 
-  // --- BOTÓN CANCELAR ---
+  /* ---------- BOTÓN: CANCELAR ---------- */
   energy_btn_cancel = lv_btn_create(energy_menu);
-  lv_obj_set_size(energy_btn_cancel, 120, 35);
-  lv_obj_align(energy_btn_cancel, LV_ALIGN_BOTTOM_MID, 0, -10);
+  lv_obj_set_size(energy_btn_cancel, 160, 38);
+  lv_obj_align(energy_btn_cancel, LV_ALIGN_BOTTOM_MID, 0, -12);
   lv_obj_set_style_bg_color(energy_btn_cancel, lv_color_hex(0x555555), 0);
-  lv_obj_set_style_radius(energy_btn_cancel, 20, 0); // Más redondeado (píldora)
+  lv_obj_set_style_radius(energy_btn_cancel, 10, 0);
   lv_obj_add_event_cb(energy_btn_cancel, close_energy_menu, LV_EVENT_CLICKED,
                       NULL);
 
   lv_obj_t *lbl_cancel = lv_label_create(energy_btn_cancel);
   lv_label_set_text(lbl_cancel, "Cancelar");
+  lv_obj_set_style_text_font(lbl_cancel, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(lbl_cancel, lv_color_white(), 0);
   lv_obj_center(lbl_cancel);
 }

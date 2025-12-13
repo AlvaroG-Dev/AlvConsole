@@ -33,12 +33,13 @@ lv_obj_t *ui_LabelShutdown = NULL;
 lv_obj_t *ui_LabelDebug = NULL;
 
 // Wifi Elements
-lv_obj_t *ui_WifiList = NULL;       // List for networks
-lv_obj_t *ui_WifiPass = NULL;       // Password input
-lv_obj_t *ui_WifiConnectBtn = NULL; // Connect Button
-lv_obj_t *ui_WifiScanBtn = NULL;    // Scan Button
-lv_obj_t *ui_WifiKeyboard = NULL;   // Screen Keyboard
+lv_obj_t *ui_WifiList = NULL;
+lv_obj_t *ui_WifiPass = NULL;
+lv_obj_t *ui_WifiConnectBtn = NULL;
+lv_obj_t *ui_WifiScanBtn = NULL;
+lv_obj_t *ui_WifiKeyboard = NULL;
 
+// Funciones externas
 extern void back_to_home(lv_event_t *e);
 extern void suspend_console(void);
 extern void restart_console(void);
@@ -48,6 +49,11 @@ extern void shutdown_console(void);
 static void event_suspend(lv_event_t *e) { suspend_console(); }
 static void event_restart(lv_event_t *e) { restart_console(); }
 static void event_shutdown(lv_event_t *e) { shutdown_console(); }
+
+// Variables para almacenar referencias de botones de sidebar
+static lv_obj_t *sidebar_btn_energy = NULL;
+static lv_obj_t *sidebar_btn_debug = NULL;
+static lv_obj_t *sidebar_btn_wifi = NULL;
 
 // Tab Switching Callback
 static void _tab_switch_cb(lv_event_t *e) {
@@ -62,14 +68,16 @@ static void _tab_switch_cb(lv_event_t *e) {
     lv_obj_add_flag(ui_PanelWifi, LV_OBJ_FLAG_HIDDEN);
 
   // Show target panel
-  if (target_panel)
+  if (target_panel) {
     lv_obj_clear_flag(target_panel, LV_OBJ_FLAG_HIDDEN);
+  }
 }
 
-// Keyboard Logic
+// Keyboard Logic - VERSIÓN MEJORADA
 static void _wifi_kb_event_cb(lv_event_t *e) {
   lv_event_code_t code = lv_event_get_code(e);
   lv_obj_t *kb = lv_event_get_target(e);
+
   if (code == LV_EVENT_READY || code == LV_EVENT_CANCEL) {
     lv_obj_add_flag(kb, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_state(ui_WifiPass, LV_STATE_FOCUSED);
@@ -78,20 +86,25 @@ static void _wifi_kb_event_cb(lv_event_t *e) {
 
 static void _wifi_ta_event_cb(lv_event_t *e) {
   lv_event_code_t code = lv_event_get_code(e);
+
   if (code == LV_EVENT_CLICKED || code == LV_EVENT_FOCUSED) {
     if (ui_WifiKeyboard) {
       lv_keyboard_set_textarea(ui_WifiKeyboard, ui_WifiPass);
       lv_obj_clear_flag(ui_WifiKeyboard, LV_OBJ_FLAG_HIDDEN);
       lv_obj_move_foreground(ui_WifiKeyboard);
+
+      // Asegurarse de que el campo de contraseña sea visible
+      lv_obj_scroll_to_view(ui_WifiPass, LV_ANIM_ON);
     }
   }
 }
 
-// Declaración de las funciones WiFi (se implementan en el .ino)
+// Declaración de las funciones WiFi
 extern void wifi_scan_click(lv_event_t *e);
 extern void wifi_connect_click(lv_event_t *e);
 
 void ui_SettingsScreen_screen_init(void) {
+
   ui_SettingsScreen = lv_obj_create(NULL);
   lv_obj_clear_flag(ui_SettingsScreen, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_set_style_bg_color(ui_SettingsScreen, lv_color_hex(0x101010),
@@ -168,42 +181,32 @@ void ui_SettingsScreen_screen_init(void) {
   lv_obj_set_style_pad_all(sidebar, 10, 0);
   lv_obj_set_style_pad_gap(sidebar, 15, 0);
 
-  // Helper to create Sidebar Buttons
-  lv_obj_t *btn;
-  lv_obj_t *lbl;
-
   // 1. Energy Button
-  btn = lv_btn_create(sidebar);
-  lv_obj_set_width(btn, 100);
-  lv_obj_set_height(btn, 40);
-  lv_obj_set_style_bg_color(btn, lv_color_hex(0x404040), 0);
-  lbl = lv_label_create(btn);
+  sidebar_btn_energy = lv_btn_create(sidebar);
+  lv_obj_set_width(sidebar_btn_energy, 100);
+  lv_obj_set_height(sidebar_btn_energy, 40);
+  lv_obj_set_style_bg_color(sidebar_btn_energy, lv_color_hex(0x404040), 0);
+  lv_obj_t *lbl = lv_label_create(sidebar_btn_energy);
   lv_label_set_text(lbl, "Energia");
   lv_obj_center(lbl);
-  lv_obj_add_event_cb(btn, _tab_switch_cb, LV_EVENT_CLICKED, NULL);
-  lv_obj_set_user_data(btn, ui_PanelEnergy); // Se actualizará después
 
   // 2. Debug Button
-  lv_obj_t *btn_debug = lv_btn_create(sidebar);
-  lv_obj_set_width(btn_debug, 100);
-  lv_obj_set_height(btn_debug, 40);
-  lv_obj_set_style_bg_color(btn_debug, lv_color_hex(0x404040), 0);
-  lbl = lv_label_create(btn_debug);
+  sidebar_btn_debug = lv_btn_create(sidebar);
+  lv_obj_set_width(sidebar_btn_debug, 100);
+  lv_obj_set_height(sidebar_btn_debug, 40);
+  lv_obj_set_style_bg_color(sidebar_btn_debug, lv_color_hex(0x404040), 0);
+  lbl = lv_label_create(sidebar_btn_debug);
   lv_label_set_text(lbl, "Debug");
   lv_obj_center(lbl);
-  lv_obj_add_event_cb(btn_debug, _tab_switch_cb, LV_EVENT_CLICKED, NULL);
-  lv_obj_set_user_data(btn_debug, ui_PanelDebug); // Se actualizará después
 
   // 3. WiFi Button
-  lv_obj_t *btn_wifi = lv_btn_create(sidebar);
-  lv_obj_set_width(btn_wifi, 100);
-  lv_obj_set_height(btn_wifi, 40);
-  lv_obj_set_style_bg_color(btn_wifi, lv_color_hex(0x404040), 0);
-  lbl = lv_label_create(btn_wifi);
+  sidebar_btn_wifi = lv_btn_create(sidebar);
+  lv_obj_set_width(sidebar_btn_wifi, 100);
+  lv_obj_set_height(sidebar_btn_wifi, 40);
+  lv_obj_set_style_bg_color(sidebar_btn_wifi, lv_color_hex(0x404040), 0);
+  lbl = lv_label_create(sidebar_btn_wifi);
   lv_label_set_text(lbl, "WiFi");
   lv_obj_center(lbl);
-  lv_obj_add_event_cb(btn_wifi, _tab_switch_cb, LV_EVENT_CLICKED, NULL);
-  lv_obj_set_user_data(btn_wifi, ui_PanelWifi); // Se actualizará después
 
   // --- CONTENT AREA ---
   lv_obj_t *content_area = lv_obj_create(main_cont);
@@ -250,9 +253,6 @@ void ui_SettingsScreen_screen_init(void) {
   lv_obj_center(ui_LabelShutdown);
   lv_obj_add_event_cb(ui_BtnShutdown, event_shutdown, LV_EVENT_CLICKED, NULL);
 
-  // Actualizar datos de los botones de sidebar
-  lv_obj_set_user_data(btn, ui_PanelEnergy);
-
   // ================= PANEL 2: DEBUG =================
   ui_PanelDebug = lv_obj_create(content_area);
   lv_obj_set_size(ui_PanelDebug, 340, 250);
@@ -268,14 +268,15 @@ void ui_SettingsScreen_screen_init(void) {
   lv_obj_set_style_text_color(ui_LabelDebug, lv_color_hex(0x00FF00), 0);
   lv_obj_set_align(ui_LabelDebug, LV_ALIGN_TOP_LEFT);
 
-  lv_obj_set_user_data(btn_debug, ui_PanelDebug);
-
-  // ================= PANEL 3: WIFI (MEJORADO) =================
+  // ================= PANEL 3: WIFI =================
   ui_PanelWifi = lv_obj_create(content_area);
   lv_obj_set_size(ui_PanelWifi, 340, 250);
   lv_obj_center(ui_PanelWifi);
   lv_obj_set_style_bg_color(ui_PanelWifi, lv_color_hex(0x181818), 0);
   lv_obj_add_flag(ui_PanelWifi, LV_OBJ_FLAG_HIDDEN);
+
+  // IMPORTANTE: Deshabilitar scroll en el panel principal WiFi
+  lv_obj_clear_flag(ui_PanelWifi, LV_OBJ_FLAG_SCROLLABLE);
 
   // Contenedor principal WiFi
   lv_obj_t *wifi_container = lv_obj_create(ui_PanelWifi);
@@ -283,20 +284,55 @@ void ui_SettingsScreen_screen_init(void) {
   lv_obj_center(wifi_container);
   lv_obj_set_style_bg_opa(wifi_container, 0, 0);
   lv_obj_set_style_border_width(wifi_container, 0, 0);
+
+  // IMPORTANTE: Deshabilitar scroll en el contenedor principal
+  lv_obj_clear_flag(wifi_container, LV_OBJ_FLAG_SCROLLABLE);
+
+  // Usar layout de columnas flex
   lv_obj_set_flex_flow(wifi_container, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_style_pad_all(wifi_container, 5, 0);
   lv_obj_set_style_pad_gap(wifi_container, 10, 0);
 
-  // 1. Fila de botones superiores
-  lv_obj_t *btn_row = lv_obj_create(wifi_container);
-  lv_obj_set_size(btn_row, 310, 45);
-  lv_obj_set_style_bg_opa(btn_row, 0, 0);
-  lv_obj_set_style_border_width(btn_row, 0, 0);
-  lv_obj_set_flex_flow(btn_row, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(btn_row, LV_FLEX_ALIGN_SPACE_BETWEEN,
+  // ========== SECCIÓN 1: CAMPO DE CONTRASEÑA (ARRIBA) ==========
+  lv_obj_t *pass_section = lv_obj_create(wifi_container);
+  lv_obj_set_size(pass_section, 310, 80);
+  lv_obj_set_style_bg_opa(pass_section, 0, 0);
+  lv_obj_set_style_border_width(pass_section, 0, 0);
+  lv_obj_clear_flag(pass_section, LV_OBJ_FLAG_SCROLLABLE); // Sin scroll
+
+  // Etiqueta de contraseña
+  lv_obj_t *pass_label = lv_label_create(pass_section);
+  lv_label_set_text(pass_label, "CONTRASEÑA:");
+  lv_obj_set_style_text_color(pass_label, lv_color_hex(0xAAAAAA), 0);
+  lv_obj_set_style_text_font(pass_label, &ui_font_RobotoRegular14, 0);
+  lv_obj_align(pass_label, LV_ALIGN_TOP_LEFT, 0, 0);
+
+  // Campo de contraseña
+  ui_WifiPass = lv_textarea_create(pass_section);
+  lv_textarea_set_one_line(ui_WifiPass, true);
+  lv_textarea_set_password_mode(ui_WifiPass, true);
+  lv_textarea_set_placeholder_text(ui_WifiPass,
+                                   "Escribe la contraseña WiFi...");
+  lv_obj_set_size(ui_WifiPass, 310, 40);
+  lv_obj_set_y(ui_WifiPass, 25); // Bajar un poco desde la etiqueta
+  lv_obj_set_style_bg_color(ui_WifiPass, lv_color_hex(0x303030), 0);
+  lv_obj_set_style_border_color(ui_WifiPass, lv_color_hex(0x555555), 0);
+  lv_obj_set_style_border_width(ui_WifiPass, 1, 0);
+  lv_obj_set_style_radius(ui_WifiPass, 6, 0);
+  lv_obj_set_style_pad_all(ui_WifiPass, 8, 0);
+  lv_obj_add_event_cb(ui_WifiPass, _wifi_ta_event_cb, LV_EVENT_CLICKED, NULL);
+
+  // ========== SECCIÓN 2: BOTONES DE ACCIÓN ==========
+  lv_obj_t *btn_section = lv_obj_create(wifi_container);
+  lv_obj_set_size(btn_section, 310, 50);
+  lv_obj_set_style_bg_opa(btn_section, 0, 0);
+  lv_obj_set_style_border_width(btn_section, 0, 0);
+  lv_obj_clear_flag(btn_section, LV_OBJ_FLAG_SCROLLABLE); // Sin scroll
+  lv_obj_set_flex_flow(btn_section, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(btn_section, LV_FLEX_ALIGN_SPACE_BETWEEN,
                         LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
-  ui_WifiScanBtn = lv_btn_create(btn_row);
+  ui_WifiScanBtn = lv_btn_create(btn_section);
   lv_obj_set_size(ui_WifiScanBtn, 140, 40);
   lv_obj_set_style_bg_color(ui_WifiScanBtn, lv_color_hex(0x3498DB), 0);
   lv_obj_set_style_radius(ui_WifiScanBtn, 8, 0);
@@ -305,7 +341,7 @@ void ui_SettingsScreen_screen_init(void) {
   lv_label_set_text(scan_label, LV_SYMBOL_REFRESH " SCAN");
   lv_obj_center(scan_label);
 
-  ui_WifiConnectBtn = lv_btn_create(btn_row);
+  ui_WifiConnectBtn = lv_btn_create(btn_section);
   lv_obj_set_size(ui_WifiConnectBtn, 140, 40);
   lv_obj_set_style_bg_color(ui_WifiConnectBtn, lv_color_hex(0x27AE60), 0);
   lv_obj_set_style_radius(ui_WifiConnectBtn, 8, 0);
@@ -315,43 +351,24 @@ void ui_SettingsScreen_screen_init(void) {
   lv_label_set_text(connect_label, LV_SYMBOL_OK " CONNECT");
   lv_obj_center(connect_label);
 
-  // 2. Lista de redes WiFi (MUCHO más arriba)
-  ui_WifiList = lv_list_create(wifi_container);
-  lv_obj_set_size(ui_WifiList, 310, 120); // Más grande
+  // ========== SECCIÓN 3: LISTA DE REDES (CON SCROLL) ==========
+  lv_obj_t *list_section = lv_obj_create(wifi_container);
+  lv_obj_set_size(list_section, 310, 110); // Altura reducida para el espacio
+  lv_obj_set_style_bg_opa(list_section, 0, 0);
+  lv_obj_set_style_border_width(list_section, 0, 0);
+  // Este contenedor SÍ puede tener scroll si es necesario
+  // pero solo afectará a la lista interna
+
+  ui_WifiList = lv_list_create(list_section);
+  lv_obj_set_size(ui_WifiList, 310, 110);
   lv_obj_set_style_bg_color(ui_WifiList, lv_color_hex(0x252525), 0);
   lv_obj_set_style_border_color(ui_WifiList, lv_color_hex(0x444444), 0);
   lv_obj_set_style_border_width(ui_WifiList, 1, 0);
   lv_obj_set_style_radius(ui_WifiList, 6, 0);
 
-  // 3. Campo de contraseña (visible mientras escribes)
-  lv_obj_t *pass_container = lv_obj_create(wifi_container);
-  lv_obj_set_size(pass_container, 310, 50);
-  lv_obj_set_style_bg_opa(pass_container, 0, 0);
-  lv_obj_set_style_border_width(pass_container, 0, 0);
-  lv_obj_set_flex_flow(pass_container, LV_FLEX_FLOW_COLUMN);
-  lv_obj_set_style_pad_top(pass_container, 5, 0);
-
-  lv_obj_t *pass_label = lv_label_create(pass_container);
-  lv_label_set_text(pass_label, "CONTRASEÑA:");
-  lv_obj_set_style_text_color(pass_label, lv_color_hex(0xAAAAAA), 0);
-  lv_obj_set_style_text_font(pass_label, &ui_font_RobotoRegular14, 0);
-  lv_obj_align(pass_label, LV_ALIGN_TOP_LEFT, 0, 0);
-
-  ui_WifiPass = lv_textarea_create(pass_container);
-  lv_textarea_set_one_line(ui_WifiPass, true);
-  lv_textarea_set_password_mode(ui_WifiPass, true);
-  lv_textarea_set_placeholder_text(ui_WifiPass,
-                                   "Escribe la contraseña WiFi...");
-  lv_obj_set_size(ui_WifiPass, 310, 35);
-  lv_obj_set_y(ui_WifiPass, 20);
-  lv_obj_set_style_bg_color(ui_WifiPass, lv_color_hex(0x303030), 0);
-  lv_obj_set_style_border_color(ui_WifiPass, lv_color_hex(0x555555), 0);
-  lv_obj_set_style_border_width(ui_WifiPass, 1, 0);
-  lv_obj_set_style_radius(ui_WifiPass, 6, 0);
-  lv_obj_set_style_pad_all(ui_WifiPass, 8, 0);
-  lv_obj_add_event_cb(ui_WifiPass, _wifi_ta_event_cb, LV_EVENT_CLICKED, NULL);
-
-  lv_obj_set_user_data(btn_wifi, ui_PanelWifi);
+  // IMPORTANTE: Solo la lista puede tener scroll
+  lv_obj_set_scroll_dir(ui_WifiList, LV_DIR_VER);
+  lv_obj_set_style_pad_all(ui_WifiList, 5, 0);
 
   // --- KEYBOARD (Global) ---
   ui_WifiKeyboard = lv_keyboard_create(ui_SettingsScreen);
@@ -359,6 +376,15 @@ void ui_SettingsScreen_screen_init(void) {
   lv_obj_align(ui_WifiKeyboard, LV_ALIGN_BOTTOM_MID, 0, 0);
   lv_obj_add_flag(ui_WifiKeyboard, LV_OBJ_FLAG_HIDDEN);
   lv_obj_add_event_cb(ui_WifiKeyboard, _wifi_kb_event_cb, LV_EVENT_ALL, NULL);
+
+  // --- CONFIGURAR EVENTOS DE LOS BOTONES DE SIDEBAR ---
+  // IMPORTANTE: Esto debe hacerse DESPUÉS de crear todos los paneles
+  lv_obj_add_event_cb(sidebar_btn_energy, _tab_switch_cb, LV_EVENT_CLICKED,
+                      ui_PanelEnergy);
+  lv_obj_add_event_cb(sidebar_btn_debug, _tab_switch_cb, LV_EVENT_CLICKED,
+                      ui_PanelDebug);
+  lv_obj_add_event_cb(sidebar_btn_wifi, _tab_switch_cb, LV_EVENT_CLICKED,
+                      ui_PanelWifi);
 
   // Mostrar panel de energía por defecto
   lv_obj_clear_flag(ui_PanelEnergy, LV_OBJ_FLAG_HIDDEN);
@@ -368,4 +394,7 @@ void ui_SettingsScreen_screen_destroy(void) {
   if (ui_SettingsScreen)
     lv_obj_del(ui_SettingsScreen);
   ui_SettingsScreen = NULL;
+  ui_PanelEnergy = NULL;
+  ui_PanelDebug = NULL;
+  ui_PanelWifi = NULL;
 }
