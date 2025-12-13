@@ -96,73 +96,84 @@ void poweroff_console(lv_event_t *e) {
     return;
   }
 
-  // Crear contenedor del menú
+  // Contenedor principal
   energy_menu = lv_obj_create(lv_scr_act());
-  lv_obj_set_size(energy_menu, 300, 280);
+  lv_obj_set_size(energy_menu, 440, 180); // más ancho que alto
   lv_obj_center(energy_menu);
   lv_obj_set_style_bg_color(energy_menu, lv_color_hex(0x2D2D2D), 0);
-  lv_obj_set_style_bg_opa(energy_menu, LV_OPA_COVER,
-                          0); // Cambiado de LV_OPA_95
-  lv_obj_set_style_radius(energy_menu, 15, 0);
+  lv_obj_set_style_bg_opa(energy_menu, LV_OPA_COVER, 0);
+  lv_obj_set_style_radius(energy_menu, 14, 0);
   lv_obj_set_style_border_width(energy_menu, 2, 0);
   lv_obj_set_style_border_color(energy_menu, lv_color_hex(0x555555), 0);
 
   // Título
   lv_obj_t *title = lv_label_create(energy_menu);
-  lv_label_set_text(title, "OPCIONES DE ENERGÍA");
-  lv_obj_set_style_text_font(title, &lv_font_montserrat_18, 0);
+  lv_label_set_text(title, "OPCIONES DE ENERGIA");
+  lv_obj_set_style_text_font(title, &lv_font_montserrat_16, 0);
   lv_obj_set_style_text_color(title, lv_color_white(), 0);
-  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 15);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 12);
 
-  // Botón Suspender
+  // Botones en horizontal
+  int btn_width = 100;
+  int btn_height = 40;
+  int spacing = 10;
+  int start_x = -((btn_width * 3 + spacing * 2) / 2); // centrar 3 botones
+
+  // Suspender
   energy_btn_suspend = lv_btn_create(energy_menu);
-  lv_obj_set_size(energy_btn_suspend, 250, 45);
-  lv_obj_align(energy_btn_suspend, LV_ALIGN_TOP_MID, 0, 60);
+  lv_obj_set_size(energy_btn_suspend, btn_width, btn_height);
+  lv_obj_align(energy_btn_suspend, LV_ALIGN_CENTER, start_x, 20);
   lv_obj_set_style_bg_color(energy_btn_suspend, lv_color_hex(0x404040), 0);
-  lv_obj_t *suspend_label = lv_label_create(energy_btn_suspend);
-  lv_label_set_text(suspend_label, "💤  Suspender");
-  lv_obj_set_style_text_font(suspend_label, &lv_font_montserrat_16, 0);
-  lv_obj_set_style_text_color(suspend_label, lv_color_white(), 0);
-  lv_obj_center(suspend_label);
   lv_obj_add_event_cb(energy_btn_suspend, energy_btn_cb, LV_EVENT_CLICKED,
                       NULL);
 
-  // Botón Reiniciar
+  lv_obj_t *suspend_label = lv_label_create(energy_btn_suspend);
+  lv_label_set_text(suspend_label, "Suspender");
+  lv_obj_set_style_text_font(suspend_label, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(suspend_label, lv_color_white(), 0);
+  lv_obj_center(suspend_label);
+
+  // Reiniciar
   energy_btn_restart = lv_btn_create(energy_menu);
-  lv_obj_set_size(energy_btn_restart, 250, 45);
-  lv_obj_align(energy_btn_restart, LV_ALIGN_TOP_MID, 0, 115);
+  lv_obj_set_size(energy_btn_restart, btn_width, btn_height);
+  lv_obj_align(energy_btn_restart, LV_ALIGN_CENTER,
+               start_x + (btn_width + spacing), 20);
   lv_obj_set_style_bg_color(energy_btn_restart, lv_color_hex(0x404040), 0);
-  lv_obj_t *restart_label = lv_label_create(energy_btn_restart);
-  lv_label_set_text(restart_label, "🔄  Reiniciar");
-  lv_obj_set_style_text_font(restart_label, &lv_font_montserrat_16, 0);
-  lv_obj_set_style_text_color(restart_label, lv_color_white(), 0);
-  lv_obj_center(restart_label);
   lv_obj_add_event_cb(energy_btn_restart, energy_btn_cb, LV_EVENT_CLICKED,
                       NULL);
 
-  // Botón Apagar
+  lv_obj_t *restart_label = lv_label_create(energy_btn_restart);
+  lv_label_set_text(restart_label, "Reiniciar");
+  lv_obj_set_style_text_font(restart_label, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(restart_label, lv_color_white(), 0);
+  lv_obj_center(restart_label);
+
+  // Apagar
   energy_btn_shutdown = lv_btn_create(energy_menu);
-  lv_obj_set_size(energy_btn_shutdown, 250, 45);
-  lv_obj_align(energy_btn_shutdown, LV_ALIGN_TOP_MID, 0, 170);
-  lv_obj_set_style_bg_color(energy_btn_shutdown, lv_color_hex(0x802020),
-                            0); // Rojo oscuro
-  lv_obj_t *shutdown_label = lv_label_create(energy_btn_shutdown);
-  lv_label_set_text(shutdown_label, "🔌  Apagar");
-  lv_obj_set_style_text_font(shutdown_label, &lv_font_montserrat_16, 0);
-  lv_obj_set_style_text_color(shutdown_label, lv_color_white(), 0);
-  lv_obj_center(shutdown_label);
+  lv_obj_set_size(energy_btn_shutdown, btn_width, btn_height);
+  lv_obj_align(energy_btn_shutdown, LV_ALIGN_CENTER,
+               start_x + 2 * (btn_width + spacing), 20);
+  lv_obj_set_style_bg_color(energy_btn_shutdown, lv_color_hex(0x802020), 0);
   lv_obj_add_event_cb(energy_btn_shutdown, energy_btn_cb, LV_EVENT_CLICKED,
                       NULL);
 
-  // Botón Cancelar
+  lv_obj_t *shutdown_label = lv_label_create(energy_btn_shutdown);
+  lv_label_set_text(shutdown_label, "Apagar");
+  lv_obj_set_style_text_font(shutdown_label, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(shutdown_label, lv_color_white(), 0);
+  lv_obj_center(shutdown_label);
+
+  // Cancelar debajo centrado
   energy_btn_cancel = lv_btn_create(energy_menu);
-  lv_obj_set_size(energy_btn_cancel, 120, 35);
-  lv_obj_align(energy_btn_cancel, LV_ALIGN_BOTTOM_MID, 0, -15);
-  lv_obj_set_style_bg_color(energy_btn_cancel, lv_color_hex(0x666666), 0);
-  lv_obj_t *cancel_label = lv_label_create(energy_btn_cancel);
-  lv_label_set_text(cancel_label, "Cancelar");
-  lv_obj_set_style_text_color(cancel_label, lv_color_white(), 0);
-  lv_obj_center(cancel_label);
+  lv_obj_set_size(energy_btn_cancel, 140, 36);
+  lv_obj_align(energy_btn_cancel, LV_ALIGN_BOTTOM_MID, 0, -12);
+  lv_obj_set_style_bg_color(energy_btn_cancel, lv_color_hex(0x606060), 0);
   lv_obj_add_event_cb(energy_btn_cancel, close_energy_menu, LV_EVENT_CLICKED,
                       NULL);
+
+  lv_obj_t *cancel_label = lv_label_create(energy_btn_cancel);
+  lv_label_set_text(cancel_label, "Cancelar");
+  lv_obj_set_style_text_font(cancel_label, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(cancel_label, lv_color_white(), 0);
+  lv_obj_center(cancel_label);
 }

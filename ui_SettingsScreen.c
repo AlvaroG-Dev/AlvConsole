@@ -25,6 +25,7 @@ lv_obj_t *ui_BtnBack = NULL;
 lv_obj_t *ui_LabelBack = NULL;
 lv_obj_t *ui_PanelPower = NULL;
 lv_obj_t *ui_LabelPowerTitle = NULL;
+lv_obj_t *ui_LabelDebug = NULL;
 lv_obj_t *ui_BtnSuspend = NULL;
 lv_obj_t *ui_LabelSuspend = NULL;
 lv_obj_t *ui_BtnRestart = NULL;
@@ -87,6 +88,7 @@ void ui_SettingsScreen_screen_init(void) {
   lv_obj_set_width(ui_Bar4, 30);
   lv_obj_set_height(ui_Bar4, 10);
   lv_obj_set_x(ui_Bar4, 195);
+  lv_obj_set_y(ui_Bar4, 0);
   lv_obj_set_align(ui_Bar4, LV_ALIGN_CENTER);
   lv_obj_set_style_radius(ui_Bar4, 3, LV_PART_MAIN | LV_STATE_DEFAULT);
   lv_obj_set_style_bg_color(ui_Bar4, lv_color_hex(0xFFFFFF),
@@ -96,8 +98,12 @@ void ui_SettingsScreen_screen_init(void) {
                                  LV_PART_MAIN | LV_STATE_DEFAULT);
   lv_obj_set_style_outline_opa(ui_Bar4, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
   lv_obj_set_style_outline_width(ui_Bar4, 2, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_outline_pad(ui_Bar4, 3, LV_PART_MAIN | LV_STATE_DEFAULT);
+
+  // Indicator styles (keeping these to ensure visibility, matching typical
+  // usage even if not in snippet)
   lv_obj_set_style_radius(ui_Bar4, 3, LV_PART_INDICATOR | LV_STATE_DEFAULT);
-  lv_obj_set_style_bg_color(ui_Bar4, lv_color_hex(0x00FF00),
+  lv_obj_set_style_bg_color(ui_Bar4, lv_color_hex(0xFFFFFF),
                             LV_PART_INDICATOR | LV_STATE_DEFAULT);
   lv_obj_set_style_bg_opa(ui_Bar4, 255, LV_PART_INDICATOR | LV_STATE_DEFAULT);
 
@@ -131,9 +137,25 @@ void ui_SettingsScreen_screen_init(void) {
   lv_obj_set_style_pad_all(ui_SettingsContent, 10, 0);
   lv_obj_set_style_pad_gap(ui_SettingsContent, 20, 0);
 
+  // --- DEBUG INFO PANEL ---
+  lv_obj_t *ui_PanelDebug = lv_obj_create(ui_SettingsContent);
+  lv_obj_set_size(ui_PanelDebug, 420, 80);
+  lv_obj_set_style_bg_color(ui_PanelDebug, lv_color_hex(0x303030), 0);
+  lv_obj_set_style_border_width(ui_PanelDebug, 1, 0);
+  lv_obj_set_style_border_color(ui_PanelDebug, lv_color_hex(0x555555), 0);
+
+  ui_LabelDebug = lv_label_create(ui_PanelDebug);
+  lv_obj_set_width(ui_LabelDebug, 400);
+  lv_label_set_long_mode(ui_LabelDebug, LV_LABEL_LONG_WRAP);
+  lv_label_set_text(ui_LabelDebug, "Esperando datos...");
+  lv_obj_set_style_text_font(ui_LabelDebug, &lv_font_montserrat_12, 0);
+  lv_obj_set_style_text_color(ui_LabelDebug, lv_color_hex(0x00FF00),
+                              0); // Terminal style
+  lv_obj_center(ui_LabelDebug);
+
   // --- POWER CONTROLS PANEL ---
   ui_PanelPower = lv_obj_create(ui_SettingsContent);
-  lv_obj_set_size(ui_PanelPower, 420, 150);
+  lv_obj_set_size(ui_PanelPower, 420, 120); // Adjusted height
   lv_obj_set_style_bg_color(ui_PanelPower, lv_color_hex(0x303030), 0);
   lv_obj_set_style_border_width(ui_PanelPower, 1, 0);
   lv_obj_set_style_border_color(ui_PanelPower, lv_color_hex(0x555555), 0);

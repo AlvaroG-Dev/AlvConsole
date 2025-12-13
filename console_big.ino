@@ -72,10 +72,13 @@ static lv_obj_t *currentProgressBar = NULL;
 static int currentProgress = 0;
 static uint32_t lastProgressUpdate = 0;
 
+// ============= BATERIA =============
 Adafruit_INA219 ina219;
 float consumoTotal_mAh = 0;
 unsigned long ultimoTiempo = 0;
 bool primeraLectura = true;
+unsigned long lastBatteryUpdate = 0;
+const unsigned long BATTERY_UPDATE_INTERVAL = 10000; // 10 segundos
 
 // ============= PROTOTIPOS DE FUNCIONES =============
 void initDisplay();
@@ -835,50 +838,7 @@ String leerDeSPIFFS(const char *path) {
   return contenido;
 }
 
-// Función para calcular porcentaje de batería 1S LiPo
-float calcularPorcentajeLiPo1S(float voltaje) {
-  // Curva de descarga típica LiPo 1S
-  if (voltaje >= 4.20)
-    return 100.0;
-  if (voltaje >= 4.15)
-    return 95.0;
-  if (voltaje >= 4.10)
-    return 90.0;
-  if (voltaje >= 4.05)
-    return 80.0;
-  if (voltaje >= 4.00)
-    return 70.0;
-  if (voltaje >= 3.95)
-    return 60.0;
-  if (voltaje >= 3.90)
-    return 50.0;
-  if (voltaje >= 3.85)
-    return 40.0;
-  if (voltaje >= 3.80)
-    return 30.0;
-  if (voltaje >= 3.75)
-    return 20.0;
-  if (voltaje >= 3.70)
-    return 15.0;
-  if (voltaje >= 3.65)
-    return 10.0;
-  if (voltaje >= 3.60)
-    return 5.0;
-  if (voltaje >= 3.30)
-    return 1.0;
-  return 0.0;
-}
-
-// Función para reiniciar contador de mAh
-void reiniciarContador() {
-  consumoTotal_mAh = 0;
-  primeraLectura = true;
-  Serial.println("Contador de mAh reiniciado");
-}
-
-void loop() {
-  lv_timer_handler();
-  checkTouchWakeup();
+void update_battery_info() {
   // Leer valores
   float voltajeShunt_mV = ina219.getShuntVoltage_mV();
   float voltajeBus_V = ina219.getBusVoltage_V();
@@ -900,48 +860,95 @@ void loop() {
   // Calcular porcentaje de batería (1S LiPo)
   float porcentaje = calcularPorcentajeLiPo1S(voltajeBateria_V);
 
+  // Determinamos el color de la batería (Verde > 20%, Rojo <= 20%)
+  lv_color_t batColor =
+      (porcentaje > 20.0) ? lv_color_hex(0x00FF00) : lv_color_hex(0xFF0000);
+
   // Actualizar barras de batería
   if (ui_Bar1 && lv_obj_is_valid(ui_Bar1)) {
     lv_bar_set_value(ui_Bar1, (int)porcentaje, LV_ANIM_ON);
+    // Aplicar color dinámico
+    lv_obj_set_style_bg_color(ui_Bar1, batColor,
+                              LV_PART_INDICATOR | LV_STATE_DEFAULT);
   }
   if (ui_Bar4 && lv_obj_is_valid(ui_Bar4)) {
     lv_bar_set_value(ui_Bar4, (int)porcentaje, LV_ANIM_OFF);
+    // Aplicar color dinámico
+    lv_obj_set_style_bg_color(ui_Bar4, batColor,
+                              LV_PART_INDICATOR | LV_STATE_DEFAULT);
   }
 
-  // Mostrar datos
-  Serial.println("\n=== MONITOR BATERÍA 1S ===");
-  Serial.print("Voltaje: ");
-  Serial.print(voltajeBateria_V, 2);
-  Serial.println(" V");
-  Serial.print("Corriente: ");
-  Serial.print(corriente_mA, 1);
-  Serial.println(" mA");
-  Serial.print("Potencia: ");
-  Serial.print(potencia_mW, 1);
-  Serial.println(" mW");
-  Serial.print("Capacidad usada: ");
-  Serial.print(consumoTotal_mAh, 0);
-  Serial.println(" mAh");
-  Serial.print("Porcentaje: ");
-  Serial.print(porcentaje, 1);
-  Serial.println(" %");
-  Serial.print("Estado: ");
-  if (corriente_mA < -20) {
-    Serial.println("CARGANDO");
-  } else if (corriente_mA > 20) {
-    Serial.println("DESCARGANDO");
-  } else {
-    Serial.println("EN REPOSO");
+  // Actualizar Debug Label en Settings
+  if (ui_LabelDebug && lv_obj_is_valid(ui_LabelDebug)) {
+    String debugText =
+        "V: " + String(voltajeBateria_V, 2) + " V  |  " +
+        String(porcentaje, 0) + "%\n" + "I: " + String(corriente_mA, 1) +
+        " mA\n" + "P: " + String(potencia_mW, 1) + " mW\n" +
+        "C: " + String(consumoTotal_mAh, 0) + " mAh\n" + "Estado: " +
+        (corriente_mA < -20 ? "CARGANDO"
+                            : (corriente_mA > 20 ? "DESCARGANDO" : "REPOSO"));
+    lv_label_set_text(ui_LabelDebug, debugText.c_str());
+  }
+}
+
+// Función para calcular porcentaje de batería 1S LiPo (Interpolación lineal)
+float calcularPorcentajeLiPo1S(float voltaje) {
+  // Puntos de referencia: {Voltaje, Porcentaje}
+  // Deben estar ordenados de mayor a menor voltaje
+  const struct {
+    float v;
+    float p;
+  } points[] = {{4.20, 100.0}, {4.15, 98.0}, {4.10, 95.0}, {4.00, 85.0},
+                {3.90, 75.0},  {3.80, 60.0}, {3.70, 40.0}, {3.60, 20.0},
+                {3.50, 10.0},  {3.40, 5.0},  {3.30, 1.0}};
+
+  // 1. Si está por encima del máximo
+  if (voltaje >= points[0].v)
+    return 100.0;
+
+  // 2. Si está por debajo del mínimo definido
+  if (voltaje <= points[10].v)
+    return 0.0;
+
+  // 3. Buscar el rango y interpolar
+  for (int i = 0; i < 10; i++) {
+    if (voltaje >= points[i + 1].v) {
+      float vHigh = points[i].v;
+      float pHigh = points[i].p;
+      float vLow = points[i + 1].v;
+      float pLow = points[i + 1].p;
+
+      // Interpolación lineal
+      return pLow + (voltaje - vLow) * (pHigh - pLow) / (vHigh - vLow);
+    }
   }
 
-  // Advertencias
-  if (voltajeBateria_V < 3.3) {
-    Serial.println("⚠️  ADVERTENCIA: Batería baja!");
+  return 0.0; // Por si acaso
+}
+
+// Función para reiniciar contador de mAh
+void reiniciarContador() {
+  consumoTotal_mAh = 0;
+  primeraLectura = true;
+  Serial.println("Contador de mAh reiniciado");
+}
+
+void loop() {
+  unsigned long now = millis();
+
+  // LVGL (debe llamarse muy frecuentemente)
+  lv_timer_handler();
+
+  // Wakeup táctil
+  checkTouchWakeup();
+
+  // Actualizar batería cada 10 segundos
+  if (now - lastBatteryUpdate >= BATTERY_UPDATE_INTERVAL) {
+    lastBatteryUpdate = now;
+    update_battery_info();
   }
-  if (voltajeBateria_V < 3.0) {
-    Serial.println("🚫 PELIGRO: Descarga profunda!");
-  }
-  delay(5);
+
+  delay(1);
 }
 
 // ============= FUNCIONES DE ENERGÍA CORREGIDAS =============

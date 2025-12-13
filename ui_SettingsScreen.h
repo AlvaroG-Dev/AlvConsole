@@ -31,6 +31,7 @@ extern lv_obj_t *ui_BtnRestart;
 extern lv_obj_t *ui_LabelRestart;
 extern lv_obj_t *ui_BtnShutdown;
 extern lv_obj_t *ui_LabelShutdown;
+extern lv_obj_t *ui_LabelDebug;
 
 #ifdef __cplusplus
 } /*extern "C"*/
