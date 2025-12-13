@@ -4,6 +4,7 @@
 #include "esp_ota_ops.h"
 #include "ui.h"
 #include "ui_events.h"
+#include <Adafruit_INA219.h>
 #include <Arduino.h>
 #include <SD.h>
 #include <SPI.h>
@@ -70,6 +71,11 @@ bool gameLoaded = false;
 static lv_obj_t *currentProgressBar = NULL;
 static int currentProgress = 0;
 static uint32_t lastProgressUpdate = 0;
+
+Adafruit_INA219 ina219;
+float consumoTotal_mAh = 0;
+unsigned long ultimoTiempo = 0;
+bool primeraLectura = true;
 
 // ============= PROTOTIPOS DE FUNCIONES =============
 void initDisplay();
@@ -750,7 +756,15 @@ void setup() {
           "ADVERTENCIA: No se encontraron objetos clickeables en ui_Screen1");
     }
   }
+  Wire.begin(TOUCH_SDA, TOUCH_SCL);
+  if (!ina219.begin()) {
+    Serial.println("Fallo al encontrar INA219");
+    while (1)
+      ;
+  }
 
+  // Configuración ÓPTIMA para batería 1S
+  ina219.setCalibration_16V_400mA(); // Más preciso para 1000mAh
   Serial.println("Sistema completamente inicializado");
   Serial.println("Memoria final: " + String(ESP.getFreeHeap()) + " bytes");
 }
@@ -821,9 +835,112 @@ String leerDeSPIFFS(const char *path) {
   return contenido;
 }
 
+// Función para calcular porcentaje de batería 1S LiPo
+float calcularPorcentajeLiPo1S(float voltaje) {
+  // Curva de descarga típica LiPo 1S
+  if (voltaje >= 4.20)
+    return 100.0;
+  if (voltaje >= 4.15)
+    return 95.0;
+  if (voltaje >= 4.10)
+    return 90.0;
+  if (voltaje >= 4.05)
+    return 80.0;
+  if (voltaje >= 4.00)
+    return 70.0;
+  if (voltaje >= 3.95)
+    return 60.0;
+  if (voltaje >= 3.90)
+    return 50.0;
+  if (voltaje >= 3.85)
+    return 40.0;
+  if (voltaje >= 3.80)
+    return 30.0;
+  if (voltaje >= 3.75)
+    return 20.0;
+  if (voltaje >= 3.70)
+    return 15.0;
+  if (voltaje >= 3.65)
+    return 10.0;
+  if (voltaje >= 3.60)
+    return 5.0;
+  if (voltaje >= 3.30)
+    return 1.0;
+  return 0.0;
+}
+
+// Función para reiniciar contador de mAh
+void reiniciarContador() {
+  consumoTotal_mAh = 0;
+  primeraLectura = true;
+  Serial.println("Contador de mAh reiniciado");
+}
+
 void loop() {
   lv_timer_handler();
   checkTouchWakeup();
+  // Leer valores
+  float voltajeShunt_mV = ina219.getShuntVoltage_mV();
+  float voltajeBus_V = ina219.getBusVoltage_V();
+  float corriente_mA = ina219.getCurrent_mA();
+  float potencia_mW = ina219.getPower_mW();
+
+  // Calcular voltaje real de la batería
+  float voltajeBateria_V = voltajeBus_V + (voltajeShunt_mV / 1000);
+
+  // Calcular mAh consumidos (integración)
+  unsigned long ahora = millis();
+  if (!primeraLectura) {
+    float horasPasadas = (ahora - ultimoTiempo) / 3600000.0;
+    consumoTotal_mAh += abs(corriente_mA) * horasPasadas;
+  }
+  ultimoTiempo = ahora;
+  primeraLectura = false;
+
+  // Calcular porcentaje de batería (1S LiPo)
+  float porcentaje = calcularPorcentajeLiPo1S(voltajeBateria_V);
+
+  // Actualizar barras de batería
+  if (ui_Bar1 && lv_obj_is_valid(ui_Bar1)) {
+    lv_bar_set_value(ui_Bar1, (int)porcentaje, LV_ANIM_ON);
+  }
+  if (ui_Bar4 && lv_obj_is_valid(ui_Bar4)) {
+    lv_bar_set_value(ui_Bar4, (int)porcentaje, LV_ANIM_OFF);
+  }
+
+  // Mostrar datos
+  Serial.println("\n=== MONITOR BATERÍA 1S ===");
+  Serial.print("Voltaje: ");
+  Serial.print(voltajeBateria_V, 2);
+  Serial.println(" V");
+  Serial.print("Corriente: ");
+  Serial.print(corriente_mA, 1);
+  Serial.println(" mA");
+  Serial.print("Potencia: ");
+  Serial.print(potencia_mW, 1);
+  Serial.println(" mW");
+  Serial.print("Capacidad usada: ");
+  Serial.print(consumoTotal_mAh, 0);
+  Serial.println(" mAh");
+  Serial.print("Porcentaje: ");
+  Serial.print(porcentaje, 1);
+  Serial.println(" %");
+  Serial.print("Estado: ");
+  if (corriente_mA < -20) {
+    Serial.println("CARGANDO");
+  } else if (corriente_mA > 20) {
+    Serial.println("DESCARGANDO");
+  } else {
+    Serial.println("EN REPOSO");
+  }
+
+  // Advertencias
+  if (voltajeBateria_V < 3.3) {
+    Serial.println("⚠️  ADVERTENCIA: Batería baja!");
+  }
+  if (voltajeBateria_V < 3.0) {
+    Serial.println("🚫 PELIGRO: Descarga profunda!");
+  }
   delay(5);
 }
 

@@ -9,146 +9,160 @@
 #include <string.h>
 
 // Variables para menús
-static lv_obj_t* energy_menu = NULL;
-static lv_obj_t* energy_btn_suspend = NULL;
-static lv_obj_t* energy_btn_restart = NULL;
-static lv_obj_t* energy_btn_shutdown = NULL;
-static lv_obj_t* energy_btn_cancel = NULL;
+static lv_obj_t *energy_menu = NULL;
+static lv_obj_t *energy_btn_suspend = NULL;
+static lv_obj_t *energy_btn_restart = NULL;
+static lv_obj_t *energy_btn_shutdown = NULL;
+static lv_obj_t *energy_btn_cancel = NULL;
 
 // Declarar funciones externas
 extern void restart_console(void);
 extern void suspend_console(void);
 extern void shutdown_console(void);
 
-void energy_btn_cb(lv_event_t* e) {
-    lv_obj_t* target = lv_event_get_target(e);
-    
-    if (target == energy_btn_suspend) {
-        lv_label_set_text(ui_Label6, "Modo suspensión");
-        suspend_console();
-        
-    } else if (target == energy_btn_restart) {
-        lv_label_set_text(ui_Label6, "Reiniciando...");
-        restart_console();
-        
-    } else if (target == energy_btn_shutdown) {
-        lv_label_set_text(ui_Label6, "Apagando...");
-        shutdown_console();
-    }
-    
-    // Cerrar menú (si no es cancelar)
-    if (target != energy_btn_cancel && energy_menu) {
-        lv_obj_del(energy_menu);
-        energy_menu = NULL;
-    }
+void energy_btn_cb(lv_event_t *e) {
+  lv_obj_t *target = lv_event_get_target(e);
+
+  if (target == energy_btn_suspend) {
+    lv_label_set_text(ui_Label6, "Modo suspensión");
+    suspend_console();
+
+  } else if (target == energy_btn_restart) {
+    lv_label_set_text(ui_Label6, "Reiniciando...");
+    restart_console();
+
+  } else if (target == energy_btn_shutdown) {
+    lv_label_set_text(ui_Label6, "Apagando...");
+    shutdown_console();
+  }
+
+  // Cerrar menú (si no es cancelar)
+  if (target != energy_btn_cancel && energy_menu) {
+    lv_obj_del(energy_menu);
+    energy_menu = NULL;
+  }
 }
 
-void close_energy_menu(lv_event_t* e) {
-    if (energy_menu) {
-        lv_obj_del(energy_menu);
-        energy_menu = NULL;
-    }
+void close_energy_menu(lv_event_t *e) {
+  if (energy_menu) {
+    lv_obj_del(energy_menu);
+    energy_menu = NULL;
+  }
 }
 
-void Trigger_Game(lv_event_t * e, const char* binPath) {
-	// Inicializar pantalla de carga
-	ui_LoadingScreen_screen_init();
-	lv_scr_load(ui_LoadingScreen);
+void Trigger_Game(lv_event_t *e, const char *binPath) {
+  // Inicializar pantalla de carga
+  ui_LoadingScreen_screen_init();
+  lv_scr_load(ui_LoadingScreen);
 
-	// Crear estructura OTAArgs dinámica
-	OTAArgs* args = (OTAArgs*)malloc(sizeof(OTAArgs));
-	if (!args) {
-	    lv_label_set_text(ui_Label6, "Error interno");
-	    return;
-	}
-	args->binPath = binPath;
-	args->progressBar = ui_Bar2;
+  // Crear estructura OTAArgs dinámica
+  OTAArgs *args = (OTAArgs *)malloc(sizeof(OTAArgs));
+  if (!args) {
+    lv_label_set_text(ui_Label6, "Error interno");
+    return;
+  }
+  args->binPath = binPath;
+  args->progressBar = ui_Bar2;
 
-	// Crear tarea OTA
-	BaseType_t result = xTaskCreate(otaTask, "OTA", 8192, args, 1, NULL);
-	if (result != pdPASS) {
-	    lv_label_set_text(ui_Label6, "Error iniciando OTA");
-	    free(args);
-	}
-
+  // Crear tarea OTA
+  BaseType_t result = xTaskCreate(otaTask, "OTA", 8192, args, 1, NULL);
+  if (result != pdPASS) {
+    lv_label_set_text(ui_Label6, "Error iniciando OTA");
+    free(args);
+  }
 }
 
-void Trigger_Game1(lv_event_t * e) { Trigger_Game(e, "/game1.bin"); }
-void Trigger_Game2(lv_event_t * e) { Trigger_Game(e, "/game2.bin"); }
+void Trigger_Game1(lv_event_t *e) { Trigger_Game(e, "/game1.bin"); }
+void Trigger_Game2(lv_event_t *e) { Trigger_Game(e, "/game2.bin"); }
 
-void settings_console(lv_event_t * e) {
-    lv_label_set_text(ui_Label6, "Menú Configuración");
+void settings_console(lv_event_t *e) {
+  if (ui_SettingsScreen) {
+    lv_scr_load_anim(ui_SettingsScreen, LV_SCR_LOAD_ANIM_MOVE_LEFT, 300, 0,
+                     false);
+  }
 }
 
-void poweroff_console(lv_event_t* e) {
-    // Si ya existe el menú, cerrarlo
-    if (energy_menu) {
-        lv_obj_del(energy_menu);
-        energy_menu = NULL;
-        return;
-    }
-    
-    // Crear contenedor del menú
-    energy_menu = lv_obj_create(lv_scr_act());
-    lv_obj_set_size(energy_menu, 300, 280);
-    lv_obj_center(energy_menu);
-    lv_obj_set_style_bg_color(energy_menu, lv_color_hex(0x2D2D2D), 0);
-    lv_obj_set_style_bg_opa(energy_menu, LV_OPA_COVER, 0); // Cambiado de LV_OPA_95
-    lv_obj_set_style_radius(energy_menu, 15, 0);
-    lv_obj_set_style_border_width(energy_menu, 2, 0);
-    lv_obj_set_style_border_color(energy_menu, lv_color_hex(0x555555), 0);
-    
-    // Título
-    lv_obj_t* title = lv_label_create(energy_menu);
-    lv_label_set_text(title, "OPCIONES DE ENERGÍA");
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_18, 0);
-    lv_obj_set_style_text_color(title, lv_color_white(), 0);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 15);
-    
-    // Botón Suspender
-    energy_btn_suspend = lv_btn_create(energy_menu);
-    lv_obj_set_size(energy_btn_suspend, 250, 45);
-    lv_obj_align(energy_btn_suspend, LV_ALIGN_TOP_MID, 0, 60);
-    lv_obj_set_style_bg_color(energy_btn_suspend, lv_color_hex(0x404040), 0);
-    lv_obj_t* suspend_label = lv_label_create(energy_btn_suspend);
-    lv_label_set_text(suspend_label, "💤  Suspender");
-    lv_obj_set_style_text_font(suspend_label, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(suspend_label, lv_color_white(), 0);
-    lv_obj_center(suspend_label);
-    lv_obj_add_event_cb(energy_btn_suspend, energy_btn_cb, LV_EVENT_CLICKED, NULL);
-    
-    // Botón Reiniciar
-    energy_btn_restart = lv_btn_create(energy_menu);
-    lv_obj_set_size(energy_btn_restart, 250, 45);
-    lv_obj_align(energy_btn_restart, LV_ALIGN_TOP_MID, 0, 115);
-    lv_obj_set_style_bg_color(energy_btn_restart, lv_color_hex(0x404040), 0);
-    lv_obj_t* restart_label = lv_label_create(energy_btn_restart);
-    lv_label_set_text(restart_label, "🔄  Reiniciar");
-    lv_obj_set_style_text_font(restart_label, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(restart_label, lv_color_white(), 0);
-    lv_obj_center(restart_label);
-    lv_obj_add_event_cb(energy_btn_restart, energy_btn_cb, LV_EVENT_CLICKED, NULL);
-    
-    // Botón Apagar
-    energy_btn_shutdown = lv_btn_create(energy_menu);
-    lv_obj_set_size(energy_btn_shutdown, 250, 45);
-    lv_obj_align(energy_btn_shutdown, LV_ALIGN_TOP_MID, 0, 170);
-    lv_obj_set_style_bg_color(energy_btn_shutdown, lv_color_hex(0x802020), 0); // Rojo oscuro
-    lv_obj_t* shutdown_label = lv_label_create(energy_btn_shutdown);
-    lv_label_set_text(shutdown_label, "🔌  Apagar");
-    lv_obj_set_style_text_font(shutdown_label, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(shutdown_label, lv_color_white(), 0);
-    lv_obj_center(shutdown_label);
-    lv_obj_add_event_cb(energy_btn_shutdown, energy_btn_cb, LV_EVENT_CLICKED, NULL);
-    
-    // Botón Cancelar
-    energy_btn_cancel = lv_btn_create(energy_menu);
-    lv_obj_set_size(energy_btn_cancel, 120, 35);
-    lv_obj_align(energy_btn_cancel, LV_ALIGN_BOTTOM_MID, 0, -15);
-    lv_obj_set_style_bg_color(energy_btn_cancel, lv_color_hex(0x666666), 0);
-    lv_obj_t* cancel_label = lv_label_create(energy_btn_cancel);
-    lv_label_set_text(cancel_label, "Cancelar");
-    lv_obj_set_style_text_color(cancel_label, lv_color_white(), 0);
-    lv_obj_center(cancel_label);
-    lv_obj_add_event_cb(energy_btn_cancel, close_energy_menu, LV_EVENT_CLICKED, NULL);
+void back_to_home(lv_event_t *e) {
+  if (ui_Screen1) {
+    lv_scr_load_anim(ui_Screen1, LV_SCR_LOAD_ANIM_MOVE_RIGHT, 300, 0, false);
+  }
+}
+
+void poweroff_console(lv_event_t *e) {
+  // Si ya existe el menú, cerrarlo
+  if (energy_menu) {
+    lv_obj_del(energy_menu);
+    energy_menu = NULL;
+    return;
+  }
+
+  // Crear contenedor del menú
+  energy_menu = lv_obj_create(lv_scr_act());
+  lv_obj_set_size(energy_menu, 300, 280);
+  lv_obj_center(energy_menu);
+  lv_obj_set_style_bg_color(energy_menu, lv_color_hex(0x2D2D2D), 0);
+  lv_obj_set_style_bg_opa(energy_menu, LV_OPA_COVER,
+                          0); // Cambiado de LV_OPA_95
+  lv_obj_set_style_radius(energy_menu, 15, 0);
+  lv_obj_set_style_border_width(energy_menu, 2, 0);
+  lv_obj_set_style_border_color(energy_menu, lv_color_hex(0x555555), 0);
+
+  // Título
+  lv_obj_t *title = lv_label_create(energy_menu);
+  lv_label_set_text(title, "OPCIONES DE ENERGÍA");
+  lv_obj_set_style_text_font(title, &lv_font_montserrat_18, 0);
+  lv_obj_set_style_text_color(title, lv_color_white(), 0);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 15);
+
+  // Botón Suspender
+  energy_btn_suspend = lv_btn_create(energy_menu);
+  lv_obj_set_size(energy_btn_suspend, 250, 45);
+  lv_obj_align(energy_btn_suspend, LV_ALIGN_TOP_MID, 0, 60);
+  lv_obj_set_style_bg_color(energy_btn_suspend, lv_color_hex(0x404040), 0);
+  lv_obj_t *suspend_label = lv_label_create(energy_btn_suspend);
+  lv_label_set_text(suspend_label, "💤  Suspender");
+  lv_obj_set_style_text_font(suspend_label, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_color(suspend_label, lv_color_white(), 0);
+  lv_obj_center(suspend_label);
+  lv_obj_add_event_cb(energy_btn_suspend, energy_btn_cb, LV_EVENT_CLICKED,
+                      NULL);
+
+  // Botón Reiniciar
+  energy_btn_restart = lv_btn_create(energy_menu);
+  lv_obj_set_size(energy_btn_restart, 250, 45);
+  lv_obj_align(energy_btn_restart, LV_ALIGN_TOP_MID, 0, 115);
+  lv_obj_set_style_bg_color(energy_btn_restart, lv_color_hex(0x404040), 0);
+  lv_obj_t *restart_label = lv_label_create(energy_btn_restart);
+  lv_label_set_text(restart_label, "🔄  Reiniciar");
+  lv_obj_set_style_text_font(restart_label, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_color(restart_label, lv_color_white(), 0);
+  lv_obj_center(restart_label);
+  lv_obj_add_event_cb(energy_btn_restart, energy_btn_cb, LV_EVENT_CLICKED,
+                      NULL);
+
+  // Botón Apagar
+  energy_btn_shutdown = lv_btn_create(energy_menu);
+  lv_obj_set_size(energy_btn_shutdown, 250, 45);
+  lv_obj_align(energy_btn_shutdown, LV_ALIGN_TOP_MID, 0, 170);
+  lv_obj_set_style_bg_color(energy_btn_shutdown, lv_color_hex(0x802020),
+                            0); // Rojo oscuro
+  lv_obj_t *shutdown_label = lv_label_create(energy_btn_shutdown);
+  lv_label_set_text(shutdown_label, "🔌  Apagar");
+  lv_obj_set_style_text_font(shutdown_label, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_color(shutdown_label, lv_color_white(), 0);
+  lv_obj_center(shutdown_label);
+  lv_obj_add_event_cb(energy_btn_shutdown, energy_btn_cb, LV_EVENT_CLICKED,
+                      NULL);
+
+  // Botón Cancelar
+  energy_btn_cancel = lv_btn_create(energy_menu);
+  lv_obj_set_size(energy_btn_cancel, 120, 35);
+  lv_obj_align(energy_btn_cancel, LV_ALIGN_BOTTOM_MID, 0, -15);
+  lv_obj_set_style_bg_color(energy_btn_cancel, lv_color_hex(0x666666), 0);
+  lv_obj_t *cancel_label = lv_label_create(energy_btn_cancel);
+  lv_label_set_text(cancel_label, "Cancelar");
+  lv_obj_set_style_text_color(cancel_label, lv_color_white(), 0);
+  lv_obj_center(cancel_label);
+  lv_obj_add_event_cb(energy_btn_cancel, close_energy_menu, LV_EVENT_CLICKED,
+                      NULL);
 }
