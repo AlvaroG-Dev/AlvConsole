@@ -13,17 +13,27 @@ extern "C" {
 // SCREEN: ui_SettingsScreen
 extern void ui_SettingsScreen_screen_init(void);
 extern void ui_SettingsScreen_screen_destroy(void);
-extern lv_obj_t * ui_SettingsScreen;
-extern lv_obj_t * ui_Container9;
-extern lv_obj_t * ui_Label8;
-extern lv_obj_t * ui_Image5;
-extern lv_obj_t * ui_Bar4;
-extern lv_obj_t * ui_Image3;
+extern lv_obj_t *ui_SettingsScreen;
+extern lv_obj_t *ui_Container9;
+extern lv_obj_t *ui_Label8;
+extern lv_obj_t *ui_Image5;
+extern lv_obj_t *ui_Bar4;
+extern lv_obj_t *ui_Image3;
 // CUSTOM VARIABLES
+extern lv_obj_t *ui_SettingsContent;
+extern lv_obj_t *ui_BtnBack;
+extern lv_obj_t *ui_LabelBack;
+extern lv_obj_t *ui_PanelPower;
+extern lv_obj_t *ui_LabelPowerTitle;
+extern lv_obj_t *ui_BtnSuspend;
+extern lv_obj_t *ui_LabelSuspend;
+extern lv_obj_t *ui_BtnRestart;
+extern lv_obj_t *ui_LabelRestart;
+extern lv_obj_t *ui_BtnShutdown;
+extern lv_obj_t *ui_LabelShutdown;
 
 #ifdef __cplusplus
 } /*extern "C"*/
 #endif
 
 #endif
-
