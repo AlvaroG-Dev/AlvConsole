@@ -161,7 +161,7 @@ void poweroff_console(lv_event_t *e) {
                       NULL);
 
   lv_obj_t *lbl1 = lv_label_create(energy_btn_suspend);
-  lv_label_set_text(lbl1, "💤\nSleep");
+  lv_label_set_text(lbl1, "Sleep");
   lv_obj_set_style_text_align(lbl1, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_center(lbl1);
 
@@ -175,7 +175,7 @@ void poweroff_console(lv_event_t *e) {
                       NULL);
 
   lv_obj_t *lbl2 = lv_label_create(energy_btn_restart);
-  lv_label_set_text(lbl2, "🔄\nReset");
+  lv_label_set_text(lbl2, "Reset");
   lv_obj_set_style_text_align(lbl2, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_center(lbl2);
 
@@ -189,7 +189,7 @@ void poweroff_console(lv_event_t *e) {
                       NULL);
 
   lv_obj_t *lbl3 = lv_label_create(energy_btn_shutdown);
-  lv_label_set_text(lbl3, "🔌\nOff");
+  lv_label_set_text(lbl3, "Off");
   lv_obj_set_style_text_align(lbl3, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_center(lbl3);
 

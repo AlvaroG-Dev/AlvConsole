@@ -11,6 +11,7 @@
 #include <SPIFFS.h>
 #include <TFT_eSPI.h>
 #include <Update.h>
+#include <WiFi.h>
 #include <Wire.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -1048,4 +1049,96 @@ void wakeup_console(void) {
 
   suspended = false;
   Serial.println("✅ Consola activa");
+}
+
+// ============= WIFI LOGIC =============
+extern "C" {
+extern lv_obj_t *ui_WifiList;
+extern lv_obj_t *ui_WifiPass;
+}
+
+static char selected_ssid[64] = {0};
+
+// Helper inside .ino (C++) doesn't need C linkage, but to avoid 'extern
+// conflicts static' error: We keep it static but OUTSIDE the extern "C" block
+// below.
+static void wifi_list_btn_cb(lv_event_t *e) {
+  lv_obj_t *btn = lv_event_get_target(e);
+  // lv_list_add_btn adds image (child 0) then label (child 1).
+  // If no icon, it might vary, but we used LV_SYMBOL_WIFI.
+  lv_obj_t *label = lv_obj_get_child(btn, 1);
+  if (!label)
+    label = lv_obj_get_child(btn, 0); // fallback
+
+  if (label && lv_obj_check_type(label, &lv_label_class)) {
+    const char *txt = lv_label_get_text(label);
+    if (txt) {
+      strncpy(selected_ssid, txt, sizeof(selected_ssid) - 1);
+      Serial.printf("Selected SSID: %s\n", selected_ssid);
+
+      // Update placeholder
+      char ph[80];
+      snprintf(ph, sizeof(ph), "Pass for %s...", selected_ssid);
+      lv_textarea_set_placeholder_text(ui_WifiPass, ph);
+    }
+  }
+}
+
+extern "C" {
+
+void wifi_scan_click(lv_event_t *e) {
+  Serial.println("Starting WiFi Scan...");
+  if (ui_WifiList)
+    lv_obj_clean(ui_WifiList);
+
+  // Show scanning...
+  if (ui_WifiList) {
+    lv_list_add_btn(ui_WifiList, NULL, "Scanning...");
+    lv_task_handler(); // Force UI update
+  }
+
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  int n = WiFi.scanNetworks();
+
+  if (ui_WifiList)
+    lv_obj_clean(ui_WifiList);
+
+  if (n == 0) {
+    if (ui_WifiList)
+      lv_list_add_btn(ui_WifiList, NULL, "No networks found");
+  } else {
+    for (int i = 0; i < n; ++i) {
+      String ssid = WiFi.SSID(i);
+      if (ssid.length() > 30)
+        ssid = ssid.substring(0, 30);
+
+      // Filter empty SSIDs
+      if (ssid.length() == 0)
+        continue;
+
+      if (ui_WifiList) {
+        lv_obj_t *item =
+            lv_list_add_btn(ui_WifiList, LV_SYMBOL_WIFI, ssid.c_str());
+        lv_obj_add_event_cb(item, wifi_list_btn_cb, LV_EVENT_CLICKED, NULL);
+      }
+    }
+  }
+  Serial.println("Scan done");
+}
+
+void wifi_connect_click(lv_event_t *e) {
+  const char *pass = lv_textarea_get_text(ui_WifiPass);
+
+  if (strlen(selected_ssid) == 0) {
+    Serial.println("No SSID selected");
+    return;
+  }
+
+  Serial.printf("Connecting to %s...\n", selected_ssid);
+  WiFi.begin(selected_ssid, pass);
+
+  // Visual feedback: Change Placeholder or Show Msg
+  // For now, simpler is better
+}
 }

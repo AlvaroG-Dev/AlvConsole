@@ -6,6 +6,8 @@
 #ifndef UI_SETTINGSSCREEN_H
 #define UI_SETTINGSSCREEN_H
 
+#include "ui.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -18,20 +20,31 @@ extern lv_obj_t *ui_Container9;
 extern lv_obj_t *ui_Label8;
 extern lv_obj_t *ui_Image5;
 extern lv_obj_t *ui_Bar4;
-extern lv_obj_t *ui_Image3;
+
 // CUSTOM VARIABLES
-extern lv_obj_t *ui_SettingsContent;
 extern lv_obj_t *ui_BtnBack;
 extern lv_obj_t *ui_LabelBack;
-extern lv_obj_t *ui_PanelPower;
-extern lv_obj_t *ui_LabelPowerTitle;
+extern lv_obj_t *ui_PanelEnergy;
+extern lv_obj_t *ui_PanelDebug;
+extern lv_obj_t *ui_PanelWifi;
+
+// Energy elements
 extern lv_obj_t *ui_BtnSuspend;
 extern lv_obj_t *ui_LabelSuspend;
 extern lv_obj_t *ui_BtnRestart;
 extern lv_obj_t *ui_LabelRestart;
 extern lv_obj_t *ui_BtnShutdown;
 extern lv_obj_t *ui_LabelShutdown;
+
+// Debug elements
 extern lv_obj_t *ui_LabelDebug;
+
+// WiFi elements
+extern lv_obj_t *ui_WifiList;
+extern lv_obj_t *ui_WifiPass;
+extern lv_obj_t *ui_WifiScanBtn;
+extern lv_obj_t *ui_WifiConnectBtn;
+extern lv_obj_t *ui_WifiKeyboard;
 
 #ifdef __cplusplus
 } /*extern "C"*/
