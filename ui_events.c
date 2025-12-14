@@ -97,36 +97,38 @@ void poweroff_console(lv_event_t *e) {
 
   /* ---------- CONTENEDOR ---------- */
   energy_menu = lv_obj_create(lv_scr_act());
-  lv_obj_set_size(energy_menu, 440, 180);
+  lv_obj_set_size(energy_menu, 440, 200);
   lv_obj_center(energy_menu);
   lv_obj_set_style_bg_color(energy_menu, lv_color_hex(0x2B2B2B), 0);
   lv_obj_set_style_bg_opa(energy_menu, LV_OPA_COVER, 0);
   lv_obj_set_style_radius(energy_menu, 18, 0);
   lv_obj_set_style_border_width(energy_menu, 2, 0);
   lv_obj_set_style_border_color(energy_menu, lv_color_hex(0x606060), 0);
-  lv_obj_set_style_pad_all(energy_menu, 12, 0);
 
   /* ---------- TÍTULO ---------- */
   lv_obj_t *title = lv_label_create(energy_menu);
   lv_label_set_text(title, "OPCIONES DE ENERGIA");
   lv_obj_set_style_text_font(title, &lv_font_montserrat_16, 0);
   lv_obj_set_style_text_color(title, lv_color_white(), 0);
-  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 6);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
 
   /* ---------- PARÁMETROS ---------- */
-  int btn_w = 120;
-  int btn_h = 44;
-  int spacing = 14;
+  int btn_w = 130;
+  int btn_h = 52; // MÁS GORDITOS
+  int spacing = 16;
   int total_w = (btn_w * 3) + (spacing * 2);
   int start_x = -total_w / 2 + btn_w / 2;
 
-  /* ---------- BOTÓN: SUSPENDER ---------- */
+  /* ---------- FILA DE BOTONES ---------- */
+  int row_y = 18;
+
+  /* ---------- SUSPENDER ---------- */
   energy_btn_suspend = lv_btn_create(energy_menu);
   lv_obj_set_size(energy_btn_suspend, btn_w, btn_h);
-  lv_obj_align(energy_btn_suspend, LV_ALIGN_CENTER, start_x, 10);
+  lv_obj_align(energy_btn_suspend, LV_ALIGN_CENTER, start_x, row_y);
   lv_obj_set_style_bg_color(energy_btn_suspend, lv_color_hex(0x3E3E3E), 0);
-  lv_obj_set_style_radius(energy_btn_suspend, 12, 0);
-  lv_obj_set_style_shadow_width(energy_btn_suspend, 12, 0);
+  lv_obj_set_style_radius(energy_btn_suspend, 14, 0);
+  lv_obj_set_style_shadow_width(energy_btn_suspend, 14, 0);
   lv_obj_set_style_shadow_opa(energy_btn_suspend, LV_OPA_30, 0);
   lv_obj_add_event_cb(energy_btn_suspend, energy_btn_cb, LV_EVENT_CLICKED,
                       NULL);
@@ -137,14 +139,14 @@ void poweroff_console(lv_event_t *e) {
   lv_obj_set_style_text_color(lbl_suspend, lv_color_white(), 0);
   lv_obj_center(lbl_suspend);
 
-  /* ---------- BOTÓN: REINICIAR ---------- */
+  /* ---------- REINICIAR ---------- */
   energy_btn_restart = lv_btn_create(energy_menu);
   lv_obj_set_size(energy_btn_restart, btn_w, btn_h);
   lv_obj_align(energy_btn_restart, LV_ALIGN_CENTER, start_x + (btn_w + spacing),
-               10);
+               row_y);
   lv_obj_set_style_bg_color(energy_btn_restart, lv_color_hex(0x3E3E3E), 0);
-  lv_obj_set_style_radius(energy_btn_restart, 12, 0);
-  lv_obj_set_style_shadow_width(energy_btn_restart, 12, 0);
+  lv_obj_set_style_radius(energy_btn_restart, 14, 0);
+  lv_obj_set_style_shadow_width(energy_btn_restart, 14, 0);
   lv_obj_set_style_shadow_opa(energy_btn_restart, LV_OPA_30, 0);
   lv_obj_add_event_cb(energy_btn_restart, energy_btn_cb, LV_EVENT_CLICKED,
                       NULL);
@@ -155,14 +157,14 @@ void poweroff_console(lv_event_t *e) {
   lv_obj_set_style_text_color(lbl_restart, lv_color_white(), 0);
   lv_obj_center(lbl_restart);
 
-  /* ---------- BOTÓN: APAGAR ---------- */
+  /* ---------- APAGAR ---------- */
   energy_btn_shutdown = lv_btn_create(energy_menu);
   lv_obj_set_size(energy_btn_shutdown, btn_w, btn_h);
   lv_obj_align(energy_btn_shutdown, LV_ALIGN_CENTER,
-               start_x + 2 * (btn_w + spacing), 10);
+               start_x + 2 * (btn_w + spacing), row_y);
   lv_obj_set_style_bg_color(energy_btn_shutdown, lv_color_hex(0x8A2A2A), 0);
-  lv_obj_set_style_radius(energy_btn_shutdown, 12, 0);
-  lv_obj_set_style_shadow_width(energy_btn_shutdown, 16, 0);
+  lv_obj_set_style_radius(energy_btn_shutdown, 14, 0);
+  lv_obj_set_style_shadow_width(energy_btn_shutdown, 18, 0);
   lv_obj_set_style_shadow_opa(energy_btn_shutdown, LV_OPA_40, 0);
   lv_obj_add_event_cb(energy_btn_shutdown, energy_btn_cb, LV_EVENT_CLICKED,
                       NULL);
@@ -173,12 +175,13 @@ void poweroff_console(lv_event_t *e) {
   lv_obj_set_style_text_color(lbl_shutdown, lv_color_white(), 0);
   lv_obj_center(lbl_shutdown);
 
-  /* ---------- BOTÓN: CANCELAR ---------- */
+  /* ---------- CANCELAR (MÁS ABAJO) ---------- */
   energy_btn_cancel = lv_btn_create(energy_menu);
-  lv_obj_set_size(energy_btn_cancel, 160, 38);
-  lv_obj_align(energy_btn_cancel, LV_ALIGN_BOTTOM_MID, 0, -12);
+  lv_obj_set_size(energy_btn_cancel, 180, 42);
+  lv_obj_align(energy_btn_cancel, LV_ALIGN_BOTTOM_MID, 0, -20); // MÁS ESPACIO
   lv_obj_set_style_bg_color(energy_btn_cancel, lv_color_hex(0x555555), 0);
-  lv_obj_set_style_radius(energy_btn_cancel, 10, 0);
+  lv_obj_set_style_radius(energy_btn_cancel, 12, 0);
+  lv_obj_set_style_shadow_width(energy_btn_cancel, 10, 0);
   lv_obj_add_event_cb(energy_btn_cancel, close_energy_menu, LV_EVENT_CLICKED,
                       NULL);
 

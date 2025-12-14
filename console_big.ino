@@ -78,13 +78,49 @@ static lv_obj_t *currentProgressBar = NULL;
 static int currentProgress = 0;
 static uint32_t lastProgressUpdate = 0;
 
-// ============= BATERIA =============
+// ============= BATERÍA =============
 Adafruit_INA219 ina219;
-float consumoTotal_mAh = 0;
 unsigned long ultimoTiempo = 0;
 bool primeraLectura = true;
 unsigned long lastBatteryUpdate = 0;
-const unsigned long BATTERY_UPDATE_INTERVAL = 10000; // 10 segundos
+const unsigned long BATTERY_UPDATE_INTERVAL = 1000; // 2s
+
+// Variables para detección de carga/descarga
+float current_threshold_charging = -20.0f;   // mA (negativo = carga)
+float current_threshold_discharging = 10.0f; // mA (positivo = descarga)
+unsigned long state_change_time = 0;
+#define MIN_STATE_TIME 2000 // Tiempo mínimo para cambiar de estado (ms)
+
+#define BAT_INTERNAL_RESISTANCE 0.25f // ohmios (ajustable)
+#define BAT_CAPACITY_mAh 1000.0f      // Capacidad real de tu batería
+#define BATTERY_CUTOFF_VOLTAGE 3.2f   // Voltaje mínimo seguro
+#define BATTERY_FULL_VOLTAGE 4.2f     // Voltaje de carga completa
+#define BATTERY_NOMINAL_VOLTAGE 3.7f  // Voltaje nominal
+
+// Estados de carga
+enum BatteryState {
+  BATTERY_CHARGING,    // Se está cargando
+  BATTERY_DISCHARGING, // Se está descargando
+  BATTERY_RESTING      // En reposo (corriente baja)
+};
+
+// Variables para Coulomb Counting
+float total_current_mAh = 0;    // Corriente acumulada (positiva=descarga)
+float last_soc_coulomb = 50.0f; // Último SOC calculado por coulomb
+float last_soc_voltage = 50.0f; // Último SOC calculado por voltaje
+unsigned long last_update_time = 0;
+BatteryState battery_state = BATTERY_RESTING;
+
+float consumoTotal_mAh = 0; // mAh descargados
+float cargaTotal_mAh = 0;   // mAh cargados
+float last_reported_percentage = 50.0;
+float last_stable_voltage = 3.7;
+
+// Variables para filtrado
+#define VOLTAGE_SAMPLES 10
+float voltage_history[VOLTAGE_SAMPLES] = {0};
+int voltage_index = 0;
+float smoothed_voltage = 3.7f;
 
 // ===================== WIFI =====================
 static char selected_ssid[64] = {0};
@@ -94,10 +130,23 @@ static volatile bool wifi_update_pending = false;
 static char wifi_status_message[128] = {0};
 static const char *wifi_status_icon = NULL;
 static SemaphoreHandle_t wifi_status_mutex = NULL;
+static SemaphoreHandle_t scan_popup_mutex = NULL;
+static volatile bool scan_popup_ready = false;
+
+// Variables para pop-up de escaneo
+static lv_obj_t *scan_popup = NULL;
+static lv_obj_t *scan_popup_title = NULL;
+static lv_obj_t *scan_popup_icon = NULL;
+static lv_obj_t *scan_popup_message = NULL;
+static lv_obj_t *scan_popup_arc = NULL;
+static lv_timer_t *scan_popup_timer = NULL;
+
+#define LVGL_MUTEX_TIMEOUT 500
 
 static bool ui_initialized = false;
 static uint32_t last_memory_check = 0;
 static SemaphoreHandle_t lvgl_mutex = NULL;
+static QueueHandle_t popup_event_queue = NULL;
 
 // ============= WIFI POPUP VARIABLES =============
 static lv_obj_t *wifi_popup = NULL;
@@ -122,6 +171,13 @@ typedef struct {
   const char *name;
   bool running;
 } TaskInfo;
+
+enum PopupEventType { POPUP_SHOW_SCAN, POPUP_UPDATE_SCAN, POPUP_CLOSE_SCAN };
+
+struct PopupEvent {
+  PopupEventType type;
+  int data; // Para network_count
+};
 
 static TaskInfo wifi_tasks[5] = {0};
 static int wifi_task_count = 0;
@@ -159,6 +215,84 @@ void print_memory_info() {
   Serial.printf("Memoria: Libre=%d, Min=%d, Frag=NA\n", ESP.getFreeHeap(),
                 ESP.getMinFreeHeap());
   // ESP.getHeapFragmentation() no existe en ESP32, lo eliminamos
+}
+
+bool take_lvgl_mutex_with_retry(int max_retries = 3) {
+  for (int i = 0; i < max_retries; i++) {
+    if (xSemaphoreTake(lvgl_mutex, pdMS_TO_TICKS(LVGL_MUTEX_TIMEOUT))) {
+      return true;
+    }
+    Serial.printf("Intento %d: mutex LVGL ocupado, esperando...\n", i + 1);
+
+    // Pequeña pausa entre reintentos
+    vTaskDelay(50 / portTICK_PERIOD_MS);
+
+    // Forzar procesamiento de LVGL si está bloqueado
+    lv_timer_handler();
+  }
+  return false;
+}
+
+// NUEVA FUNCIÓN: Procesador de eventos de pop-up (llamar desde loop)
+void process_popup_events() {
+  static PopupEvent event;
+
+  // Procesar todos los eventos pendientes
+  while (popup_event_queue &&
+         xQueueReceive(popup_event_queue, &event, 0) == pdTRUE) {
+
+    // Intentar obtener mutex LVGL con reintentos
+    if (!take_lvgl_mutex_with_retry(2)) {
+      Serial.printf("ERROR: No se pudo obtener mutex LVGL para evento %d\n",
+                    event.type);
+      continue; // Saltar este evento, procesar el siguiente
+    }
+
+    switch (event.type) {
+    case POPUP_SHOW_SCAN:
+      Serial.println("Procesando evento: Mostrar pop-up de escaneo");
+      show_wifi_scan_popup();
+      break;
+
+    case POPUP_UPDATE_SCAN:
+      Serial.printf("Procesando evento: Actualizar pop-up con %d redes\n",
+                    event.data);
+      // Llamar a la versión DIRECTA (sin verificación de ready, ya estamos en
+      // contexto LVGL)
+      if (scan_popup) {
+        if (scan_popup_message && lv_obj_is_valid(scan_popup_message)) {
+          char counter_text[48];
+          snprintf(counter_text, sizeof(counter_text), "Redes encontradas: %d",
+                   event.data);
+          lv_label_set_text(scan_popup_message, counter_text);
+          lv_obj_invalidate(scan_popup_message);
+        }
+      } else {
+        Serial.println("WARNING: scan_popup es NULL al actualizar");
+      }
+      break;
+
+    case POPUP_CLOSE_SCAN:
+      if (event.data == -1) {
+        // Caso especial: solo limpiar lista
+        Serial.println("Procesando evento: Limpiar lista WiFi");
+        if (ui_WifiList && lv_obj_is_valid(ui_WifiList)) {
+          wifi_list_cleanup(ui_WifiList);
+          lv_obj_clean(ui_WifiList);
+          lv_list_add_btn(ui_WifiList, LV_SYMBOL_REFRESH, "Escaneando...");
+        }
+      } else {
+        Serial.println("Procesando evento: Cerrar pop-up de escaneo");
+        close_wifi_scan_popup();
+      }
+      break;
+    }
+
+    xSemaphoreGive(lvgl_mutex);
+
+    // Pequeña pausa para que LVGL respire
+    vTaskDelay(5 / portTICK_PERIOD_MS);
+  }
 }
 
 static void memory_cleanup_task(void *param) {
@@ -349,15 +483,15 @@ void otaTask(void *arg) {
   // PASO 2: OBTENER PARTICION
   otaPart = esp_ota_get_next_update_partition(NULL);
   if (!otaPart) {
-    failAndReturn("Error: No hay partición OTA");
+    failAndReturn("Error: No hay particion OTA");
     return;
   }
 
-  Serial.printf("🔧 Partición: %s (0x%x, %d bytes)\n", otaPart->label,
+  Serial.printf("🔧 Particion: %s (0x%x, %d bytes)\n", otaPart->label,
                 otaPart->address, otaPart->size);
 
   // PASO 3: Preparar partición (opcional)
-  lv_label_set_text(ui_Label6, "Preparando partición...");
+  lv_label_set_text(ui_Label6, "Preparando particion...");
   vTaskDelay(100 / portTICK_PERIOD_MS);
 
   // PASO 4: INICIAR UPDATE
@@ -410,12 +544,12 @@ void otaTask(void *arg) {
   progress_timer_cb(NULL);
 
   if (!Update.end()) {
-    failAndReturn("OTA Falló");
+    failAndReturn("OTA Fallo");
     return;
   }
 
   Serial.println("🎉 Juego Cargado!");
-  lv_label_set_text(ui_Label6, "Juego Cargado!");
+  lv_label_set_text(ui_Label6, "Juego Cargado");
   vTaskDelay(500 / portTICK_PERIOD_MS);
 
   if (esp_ota_set_boot_partition(otaPart) != ESP_OK) {
@@ -743,7 +877,7 @@ bool initSD() {
   bool sdOk = SD.begin(SD_CS);
 
   if (!sdOk) {
-    Serial.println("ERROR: Falló SD.begin() simple");
+    Serial.println("ERROR: Fallo SD.begin() simple");
 
     // Intentar con SPI explícito
     Serial.println("Intentando con SPI explícito...");
@@ -760,7 +894,7 @@ bool initSD() {
         Serial.println("OK");
         break;
       }
-      Serial.println("Falló");
+      Serial.println("Fallo");
       delay(50);
     }
   }
@@ -907,9 +1041,10 @@ void setup() {
   lvgl_mutex = xSemaphoreCreateMutex();
   wifi_mutex = xSemaphoreCreateMutex();
   wifi_status_mutex = xSemaphoreCreateMutex();
+  popup_event_queue = xQueueCreate(10, sizeof(PopupEvent));
 
-  if (!lvgl_mutex || !wifi_mutex || !wifi_status_mutex) {
-    Serial.println("ERROR: No se pudieron crear mutexes");
+  if (!lvgl_mutex || !wifi_mutex || !wifi_status_mutex || !popup_event_queue) {
+    Serial.println("ERROR: No se pudieron crear recursos de sincronización");
     while (1)
       delay(1000);
   }
@@ -964,7 +1099,7 @@ void setup() {
     while (1)
       delay(1000);
   }
-  ina219.setCalibration_16V_400mA();
+  ina219.setCalibration_32V_2A();
 
   // 7. WiFi (solo modo STA)
   WiFi.mode(WIFI_STA);
@@ -1044,99 +1179,311 @@ String leerDeSPIFFS(const char *path) {
   return contenido;
 }
 
-void update_battery_info() {
-  // Leer valores
-  float voltajeShunt_mV = ina219.getShuntVoltage_mV();
-  float voltajeBus_V = ina219.getBusVoltage_V();
-  float corriente_mA = ina219.getCurrent_mA();
-  float potencia_mW = ina219.getPower_mW();
+// Función para filtrar el voltaje (media móvil)
+float smooth_voltage(float new_voltage) {
+  voltage_history[voltage_index] = new_voltage;
+  voltage_index = (voltage_index + 1) % VOLTAGE_SAMPLES;
 
-  // Calcular voltaje real de la batería
-  float voltajeBateria_V = voltajeBus_V + (voltajeShunt_mV / 1000);
-
-  // Calcular mAh consumidos (integración)
-  unsigned long ahora = millis();
-  if (!primeraLectura) {
-    float horasPasadas = (ahora - ultimoTiempo) / 3600000.0;
-    consumoTotal_mAh += abs(corriente_mA) * horasPasadas;
-  }
-  ultimoTiempo = ahora;
-  primeraLectura = false;
-
-  // Calcular porcentaje de batería (1S LiPo)
-  float porcentaje = calcularPorcentajeLiPo1S(voltajeBateria_V);
-
-  // Determinamos el color de la batería (Verde > 20%, Rojo <= 20%)
-  lv_color_t batColor =
-      (porcentaje > 20.0) ? lv_color_hex(0x00FF00) : lv_color_hex(0xFF0000);
-
-  // Actualizar barras de batería
-  if (ui_Bar1 && lv_obj_is_valid(ui_Bar1)) {
-    lv_bar_set_value(ui_Bar1, (int)porcentaje, LV_ANIM_ON);
-    // Aplicar color dinámico
-    lv_obj_set_style_bg_color(ui_Bar1, batColor,
-                              LV_PART_INDICATOR | LV_STATE_DEFAULT);
-  }
-  if (ui_Bar4 && lv_obj_is_valid(ui_Bar4)) {
-    lv_bar_set_value(ui_Bar4, (int)porcentaje, LV_ANIM_OFF);
-    // Aplicar color dinámico
-    lv_obj_set_style_bg_color(ui_Bar4, batColor,
-                              LV_PART_INDICATOR | LV_STATE_DEFAULT);
-  }
-
-  // Actualizar Debug Label en Settings
-  if (ui_LabelDebug && lv_obj_is_valid(ui_LabelDebug)) {
-    String debugText =
-        "V: " + String(voltajeBateria_V, 2) + " V  |  " +
-        String(porcentaje, 0) + "%\n" + "I: " + String(corriente_mA, 1) +
-        " mA\n" + "P: " + String(potencia_mW, 1) + " mW\n" +
-        "C: " + String(consumoTotal_mAh, 0) + " mAh\n" + "Estado: " +
-        (corriente_mA < -20 ? "CARGANDO"
-                            : (corriente_mA > 20 ? "DESCARGANDO" : "REPOSO"));
-    lv_label_set_text(ui_LabelDebug, debugText.c_str());
-  }
-}
-
-// Función para calcular porcentaje de batería 1S LiPo (Interpolación lineal)
-float calcularPorcentajeLiPo1S(float voltaje) {
-  // Puntos de referencia: {Voltaje, Porcentaje}
-  // Deben estar ordenados de mayor a menor voltaje
-  const struct {
-    float v;
-    float p;
-  } points[] = {{4.20, 100.0}, {4.15, 98.0}, {4.10, 95.0}, {4.00, 85.0},
-                {3.90, 75.0},  {3.80, 60.0}, {3.70, 40.0}, {3.60, 20.0},
-                {3.50, 10.0},  {3.40, 5.0},  {3.30, 1.0}};
-
-  // 1. Si está por encima del máximo
-  if (voltaje >= points[0].v)
-    return 100.0;
-
-  // 2. Si está por debajo del mínimo definido
-  if (voltaje <= points[10].v)
-    return 0.0;
-
-  // 3. Buscar el rango y interpolar
-  for (int i = 0; i < 10; i++) {
-    if (voltaje >= points[i + 1].v) {
-      float vHigh = points[i].v;
-      float pHigh = points[i].p;
-      float vLow = points[i + 1].v;
-      float pLow = points[i + 1].p;
-
-      // Interpolación lineal
-      return pLow + (voltaje - vLow) * (pHigh - pLow) / (vHigh - vLow);
+  float sum = 0;
+  int valid_samples = 0;
+  for (int i = 0; i < VOLTAGE_SAMPLES; i++) {
+    if (voltage_history[i] > 0) {
+      sum += voltage_history[i];
+      valid_samples++;
     }
   }
 
-  return 0.0; // Por si acaso
+  if (valid_samples > 0) {
+    smoothed_voltage = sum / valid_samples;
+  }
+
+  return smoothed_voltage;
 }
 
-// Función para reiniciar contador de mAh
-void reiniciarContador() {
-  consumoTotal_mAh = 0;
-  primeraLectura = true;
-  Serial.println("Contador de mAh reiniciado");
+// Función para determinar el estado de la batería
+BatteryState determine_battery_state(float current_mA) {
+  static BatteryState last_state = BATTERY_RESTING;
+  static unsigned long last_change = 0;
+
+  BatteryState new_state;
+
+  if (current_mA < current_threshold_charging) {
+    new_state = BATTERY_CHARGING;
+  } else if (current_mA > current_threshold_discharging) {
+    new_state = BATTERY_DISCHARGING;
+  } else {
+    new_state = BATTERY_RESTING;
+  }
+
+  // Evitar cambios bruscos de estado
+  if (new_state != last_state) {
+    if (millis() - last_change > MIN_STATE_TIME) {
+      last_state = new_state;
+      last_change = millis();
+      state_change_time = millis();
+      Serial.printf("Cambio de estado de batería: %d -> %d\n", battery_state,
+                    new_state);
+    }
+  } else {
+    last_change = millis();
+  }
+
+  return last_state;
+}
+
+// SOC basado en voltaje (solo para calibración y estados extremos)
+float calculate_soc_from_voltage(float voltage) {
+  // Curva de descarga típica LiPo (ajustar según tu batería)
+  if (voltage >= 4.20f)
+    return 100.0f;
+  if (voltage >= 4.15f)
+    return 95.0f;
+  if (voltage >= 4.10f)
+    return 90.0f;
+  if (voltage >= 4.05f)
+    return 80.0f;
+  if (voltage >= 4.00f)
+    return 70.0f;
+  if (voltage >= 3.95f)
+    return 60.0f;
+  if (voltage >= 3.90f)
+    return 50.0f;
+  if (voltage >= 3.85f)
+    return 40.0f;
+  if (voltage >= 3.80f)
+    return 30.0f;
+  if (voltage >= 3.75f)
+    return 20.0f;
+  if (voltage >= 3.70f)
+    return 15.0f;
+  if (voltage >= 3.65f)
+    return 10.0f;
+  if (voltage >= 3.60f)
+    return 5.0f;
+  if (voltage >= 3.50f)
+    return 2.0f;
+  if (voltage >= 3.40f)
+    return 0.0f;
+  if (voltage >= 3.30f)
+    return 0.0f;
+  return 0.0f;
+}
+
+// SOC basado en Coulomb Counting (integración de corriente)
+float calculate_soc_from_coulomb(float current_mA, unsigned long dt_ms,
+                                 BatteryState state) {
+  static float remaining_capacity_mAh =
+      BAT_CAPACITY_mAh * 0.5f; // Asumir 50% inicial
+  static float max_capacity = BAT_CAPACITY_mAh;
+
+  float dt_hours = dt_ms / 3600000.0f;
+  float delta_mAh = current_mA * dt_hours;
+
+  // Actualizar capacidad restante según el estado
+  switch (state) {
+  case BATTERY_DISCHARGING:
+    // Solo contar cuando hay carga significativa
+    if (current_mA > 20.0f) {
+      remaining_capacity_mAh -= delta_mAh;
+      if (remaining_capacity_mAh < 0)
+        remaining_capacity_mAh = 0;
+    }
+    break;
+
+  case BATTERY_CHARGING:
+    // Solo contar cuando hay carga significativa
+    if (current_mA < -20.0f) {
+      remaining_capacity_mAh += -delta_mAh; // delta es negativo al cargar
+      if (remaining_capacity_mAh > max_capacity)
+        remaining_capacity_mAh = max_capacity;
+    }
+    break;
+
+  case BATTERY_RESTING:
+    // No hacer nada, solo pequeñas correcciones por voltaje
+    break;
+  }
+
+  // Calcular porcentaje
+  float soc = (remaining_capacity_mAh / max_capacity) * 100.0f;
+
+  // Limitar entre 0 y 100%
+  if (soc > 100.0f)
+    soc = 100.0f;
+  if (soc < 0.0f)
+    soc = 0.0f;
+
+  return soc;
+}
+
+// --------------------------------------------------
+// Actualización de información de batería con Coulomb Counting
+void update_battery_info() {
+  unsigned long now = millis();
+  unsigned long dt_ms = now - last_update_time;
+
+  if (dt_ms < 1000)
+    return; // Actualizar cada segundo aproximadamente
+
+  last_update_time = now;
+
+  // --- Lecturas del INA219 ---
+  float shunt_mV = ina219.getShuntVoltage_mV();
+  float bus_V = ina219.getBusVoltage_V();
+  float current_mA =
+      ina219.getCurrent_mA(); // Positiva = descarga, Negativa = carga
+
+  // Voltaje real de la batería
+  float battery_voltage = bus_V + (shunt_mV / 1000.0f);
+
+  // Filtrar voltaje
+  float filtered_voltage = smooth_voltage(battery_voltage);
+
+  // --- Determinar estado de la batería ---
+  battery_state = determine_battery_state(current_mA);
+
+  // --- Calcular SOC por voltaje (solo para referencia y calibración) ---
+  float soc_voltage = calculate_soc_from_voltage(filtered_voltage);
+  last_soc_voltage = soc_voltage;
+
+  // --- Calcular SOC por Coulomb Counting ---
+  float soc_coulomb =
+      calculate_soc_from_coulomb(current_mA, dt_ms, battery_state);
+  last_soc_coulomb = soc_coulomb;
+
+  // --- Combinar ambos métodos inteligentemente ---
+  float final_soc = soc_coulomb; // Principalmente usar coulomb counting
+
+  // Correcciones basadas en voltaje en estados extremos
+  if (battery_state == BATTERY_RESTING) {
+    // En reposo, confiar más en el voltaje
+    if (abs(soc_voltage - soc_coulomb) > 20.0f) {
+      // Gran discrepancia, corregir suavemente
+      final_soc = final_soc * 0.7f + soc_voltage * 0.3f;
+    }
+  }
+
+  // Corrección en voltajes extremos
+  if (filtered_voltage >= BATTERY_FULL_VOLTAGE - 0.05f) {
+    // Casi llena, forzar 100%
+    final_soc = 100.0f;
+    // Resetear coulomb counting
+    total_current_mAh = 0;
+  } else if (filtered_voltage <= BATTERY_CUTOFF_VOLTAGE + 0.1f) {
+    // Casi vacía, forzar 0% si estamos descargando
+    if (battery_state == BATTERY_DISCHARGING) {
+      final_soc = 0.0f;
+    }
+  }
+
+  // Suavizar cambios bruscos
+  static float last_reported_soc = 50.0f;
+  float max_change_per_sec = 1.0f; // Máximo 1% por segundo
+  float max_change = max_change_per_sec * (dt_ms / 1000.0f);
+
+  if (abs(final_soc - last_reported_soc) > max_change) {
+    if (final_soc > last_reported_soc) {
+      final_soc = last_reported_soc + max_change;
+    } else {
+      final_soc = last_reported_soc - max_change;
+    }
+  }
+
+  last_reported_soc = final_soc;
+
+  // --- Determinar si está cargando (para el TP4056) ---
+  bool is_charging = (current_mA < -50.0f); // Corriente negativa mayor a 50mA
+
+  // --- Determinar color de la batería ---
+  lv_color_t battery_color;
+  if (final_soc > 50.0f) {
+    battery_color = lv_color_hex(0x00FF00); // Verde
+  } else if (final_soc > 20.0f) {
+    battery_color = lv_color_hex(0xFFA500); // Naranja
+  } else {
+    battery_color = lv_color_hex(0xFF0000); // Rojo
+  }
+
+  if (is_charging) {
+    battery_color = lv_color_hex(0x00BFFF); // Azul claro para carga
+  }
+
+  // --- Actualizar UI ---
+  if (xSemaphoreTake(lvgl_mutex, pdMS_TO_TICKS(50))) {
+    if (ui_Bar1 && lv_obj_is_valid(ui_Bar1)) {
+      lv_bar_set_value(ui_Bar1, (int)final_soc, LV_ANIM_ON);
+      lv_obj_set_style_bg_color(ui_Bar1, battery_color,
+                                LV_PART_INDICATOR | LV_STATE_DEFAULT);
+    }
+
+    if (ui_Bar4 && lv_obj_is_valid(ui_Bar4)) {
+      lv_bar_set_value(ui_Bar4, (int)final_soc, LV_ANIM_ON);
+      lv_obj_set_style_bg_color(ui_Bar4, battery_color,
+                                LV_PART_INDICATOR | LV_STATE_DEFAULT);
+    }
+
+    if (ui_LabelDebug && lv_obj_is_valid(ui_LabelDebug)) {
+      String state_str;
+      switch (battery_state) {
+      case BATTERY_CHARGING:
+        state_str = "CARGANDO";
+        break;
+      case BATTERY_DISCHARGING:
+        state_str = "DESCARGANDO";
+        break;
+      case BATTERY_RESTING:
+        state_str = "REPOSO";
+        break;
+      }
+
+      String debugText = "Batería: " + String(final_soc, 1) + "%\n" +
+                         "Voltaje: " + String(filtered_voltage, 2) + "V\n" +
+                         "Corriente: " + String(current_mA, 1) + "mA\n" +
+                         "Estado: " + state_str + "\n" +
+                         "SOC Voltaje: " + String(soc_voltage, 1) + "%\n" +
+                         "SOC Coulomb: " + String(soc_coulomb, 1) + "%\n" +
+                         (is_charging ? "⚡ CARGANDO (TP4056)" : "");
+
+      lv_label_set_text(ui_LabelDebug, debugText.c_str());
+    }
+
+    xSemaphoreGive(lvgl_mutex);
+  }
+
+  // --- Debug por serial ---
+  static unsigned long last_serial_log = 0;
+  if (now - last_serial_log > 3000) {
+    last_serial_log = now;
+
+    Serial.println("========== BATERÍA ==========");
+    Serial.printf("Voltaje: %.2fV (Filtrado: %.2fV)\n", battery_voltage,
+                  filtered_voltage);
+    Serial.printf("Corriente: %.1fmA\n", current_mA);
+    Serial.printf("Estado: %s\n", battery_state == BATTERY_CHARGING ? "CARGANDO"
+                                  : battery_state == BATTERY_DISCHARGING
+                                      ? "DESCARGANDO"
+                                      : "REPOSO");
+    Serial.printf("SOC Final: %.1f%%\n", final_soc);
+    Serial.printf("SOC Voltaje: %.1f%%\n", soc_voltage);
+    Serial.printf("SOC Coulomb: %.1f%%\n", soc_coulomb);
+    Serial.printf("Cargando: %s\n", is_charging ? "SI" : "NO");
+    Serial.println("============================\n");
+  }
+}
+
+// Función para calibrar la batería (llamar cuando esté completamente cargada)
+void calibrate_battery_full() {
+  Serial.println("Calibrando batería al 100%...");
+  total_current_mAh = 0;
+  // Aquí podrías guardar en EEPROM que está calibrada
+}
+
+// Función para calibrar la batería (llamar cuando esté completamente
+// descargada)
+void calibrate_battery_empty() {
+  Serial.println("Calibrando batería al 0%...");
+  total_current_mAh = BAT_CAPACITY_mAh;
+  // Aquí podrías guardar en EEPROM que está calibrada
 }
 
 void loop() {
@@ -1147,6 +1494,8 @@ void loop() {
     lv_timer_handler();
     xSemaphoreGive(lvgl_mutex);
   }
+
+  process_popup_events();
 
   // Wakeup táctil
   checkTouchWakeup();
@@ -1164,8 +1513,7 @@ void loop() {
   if (now % 5000 < 10) { // Cada ~5 segundos
     print_memory_info();
   }
-
-  delay(2);
+  delay(1);
 }
 
 // ============= FUNCIONES DE ENERGÍA CORREGIDAS =============
@@ -1576,6 +1924,7 @@ static void wifi_list_btn_cb(lv_event_t *e) {
                 selected_ssid, strlen(selected_ssid));
 }
 
+// En la función wifi_scan_task_safe - AGREGAR LLAMADA PARA ACTUALIZAR POP-UP
 static void wifi_scan_task_safe(void *pvParameter) {
   TaskHandle_t this_task = xTaskGetCurrentTaskHandle();
   register_wifi_task(this_task, "WiFiScan");
@@ -1590,26 +1939,38 @@ static void wifi_scan_task_safe(void *pvParameter) {
   if (ESP.getFreeHeap() < 20000) {
     Serial.println("ERROR: Memoria insuficiente para escaneo");
     wifi_scanning = false;
+
+    // Enviar evento de cierre
+    PopupEvent event = {POPUP_CLOSE_SCAN, 0};
+    xQueueSend(popup_event_queue, &event, pdMS_TO_TICKS(50));
+
     unregister_wifi_task(this_task);
     vTaskDelete(NULL);
     return;
   }
 
-  // 2. Tomar mutex WiFi
-  if (!xSemaphoreTake(wifi_mutex, pdMS_TO_TICKS(3000))) {
+  // 2. Tomar mutex WiFi con timeout más largo
+  if (!xSemaphoreTake(wifi_mutex, pdMS_TO_TICKS(5000))) {
     Serial.println("ERROR: No se pudo obtener mutex WiFi");
     wifi_scanning = false;
+
+    PopupEvent event = {POPUP_CLOSE_SCAN, 0};
+    xQueueSend(popup_event_queue, &event, pdMS_TO_TICKS(50));
+
     unregister_wifi_task(this_task);
     vTaskDelete(NULL);
     return;
   }
 
-  // 3. Configurar WiFi
+  // 3. Dar tiempo para que el pop-up se muestre completamente
+  vTaskDelay(400 / portTICK_PERIOD_MS);
+
+  // 4. Configurar WiFi
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
   vTaskDelay(pdMS_TO_TICKS(200));
 
-  // 4. Escanear redes (sin UI)
+  // 5. Escanear redes
   int16_t n = 0;
   try {
     n = WiFi.scanNetworks(false, true, false, 200);
@@ -1620,10 +1981,14 @@ static void wifi_scan_task_safe(void *pvParameter) {
 
   Serial.printf("Encontradas %d redes\n", n);
 
-  // 5. Liberar mutex WiFi temprano
+  // 6. Enviar evento para actualizar pop-up (ASINCRONO)
+  PopupEvent update_event = {POPUP_UPDATE_SCAN, n};
+  xQueueSend(popup_event_queue, &update_event, pdMS_TO_TICKS(100));
+
+  // 7. Liberar mutex WiFi
   xSemaphoreGive(wifi_mutex);
 
-  // 6. Procesar resultados
+  // 8. Procesar resultados
   if (n > 0) {
     // Crear array temporal
     int max_networks = (n > 10) ? 10 : n;
@@ -1645,7 +2010,7 @@ static void wifi_scan_task_safe(void *pvParameter) {
         valid_count++;
       }
 
-      // Actualizar UI de forma segura
+      // Actualizar UI de lista
       if (valid_count > 0) {
         update_wifi_list_safe(networks, valid_count);
       }
@@ -1660,10 +2025,18 @@ static void wifi_scan_task_safe(void *pvParameter) {
     }
   }
 
-  // 7. Limpiar escaneo
+  // 9. Esperar 2 segundos para mostrar el resultado
+  Serial.println("Esperando 2 segundos antes de cerrar pop-up...");
+  vTaskDelay(2000 / portTICK_PERIOD_MS);
+
+  // 10. Enviar evento para cerrar pop-up
+  PopupEvent close_event = {POPUP_CLOSE_SCAN, 0};
+  xQueueSend(popup_event_queue, &close_event, pdMS_TO_TICKS(100));
+
+  // 11. Limpiar escaneo
   WiFi.scanDelete();
 
-  // 8. Finalizar
+  // 12. Finalizar
   wifi_scanning = false;
   Serial.println("WiFi scan task SAFE - FINISHED");
 
@@ -1673,8 +2046,10 @@ static void wifi_scan_task_safe(void *pvParameter) {
   vTaskDelete(NULL);
 }
 
-// Función de escaneo WiFi (llamada desde UI)
+// En la función wifi_scan_click - ARREGLAR LLAMADA AL POP-UP
 extern "C" void wifi_scan_click(lv_event_t *e) {
+  Serial.println("=== Botón SCAN clickeado ===");
+
   // Limpiar tareas previas primero
   cleanup_all_wifi_tasks();
 
@@ -1686,21 +2061,31 @@ extern "C" void wifi_scan_click(lv_event_t *e) {
     return;
   }
 
-  // Limpiar UI
-  if (xSemaphoreTake(lvgl_mutex, pdMS_TO_TICKS(100))) {
-    if (ui_WifiList && lv_obj_is_valid(ui_WifiList)) {
-      wifi_list_cleanup(ui_WifiList);
-      lv_obj_clean(ui_WifiList);
-      lv_list_add_btn(ui_WifiList, LV_SYMBOL_REFRESH, "Scanning networks...");
-    }
-    xSemaphoreGive(lvgl_mutex);
+  // ENVIAR EVENTO en lugar de llamar directamente
+  PopupEvent event = {POPUP_SHOW_SCAN, 0};
+  if (xQueueSend(popup_event_queue, &event, pdMS_TO_TICKS(100)) != pdTRUE) {
+    Serial.println("ERROR: No se pudo encolar evento de pop-up");
+    return;
   }
 
-  // Crear tarea con stack más grande
+  Serial.println("Evento de pop-up encolado exitosamente");
+
+  // Limpiar UI de lista de forma ASINCRONA
+  PopupEvent clear_event = {POPUP_CLOSE_SCAN, -1}; // -1 indica limpiar lista
+  xQueueSend(popup_event_queue, &clear_event, pdMS_TO_TICKS(50));
+
+  // Crear tarea de escaneo con retraso
+  Serial.println("Creando tarea de escaneo WiFi...");
+  vTaskDelay(200 / portTICK_PERIOD_MS); // Dar tiempo a que se muestre el pop-up
+
   if (xTaskCreate(wifi_scan_task_safe, "WiFiScanSafe", 16384, NULL, 2, NULL) !=
       pdPASS) {
     Serial.println("ERROR: No se pudo crear tarea WiFi");
     wifi_scanning = false;
+
+    // Enviar evento para cerrar pop-up
+    PopupEvent close_event = {POPUP_CLOSE_SCAN, 0};
+    xQueueSend(popup_event_queue, &close_event, pdMS_TO_TICKS(50));
   } else {
     Serial.println("Tarea WiFi creada exitosamente");
   }
@@ -1780,7 +2165,7 @@ static void wifi_connect_task(void *pvParameter) {
 
     set_wifi_status(LV_SYMBOL_CLOSE, "WiFi busy - try again");
     unregister_wifi_task(this_task);
-    vTaskDelay(pdMS_TO_TICKS(2000)); // Esperar antes de cerrar
+    vTaskDelay(pdMS_TO_TICKS(5000)); // Esperar antes de cerrar
     vTaskDelete(NULL);
     return;
   }
@@ -1885,7 +2270,7 @@ static void wifi_connect_task(void *pvParameter) {
     }
 
     // Mostrar progreso en UI cada 2 segundos
-    if (millis() - startTime > attempt * 2000) {
+    if (millis() - startTime > attempt * 1000) {
       attempt++;
 
       char progress_msg[80];
@@ -2018,7 +2403,7 @@ static void wifi_connect_task(void *pvParameter) {
   memset(local_password, 0, sizeof(local_password));
 
   // Pequeña pausa antes de terminar (para que se vea el pop-up)
-  vTaskDelay(pdMS_TO_TICKS(2000));
+  vTaskDelay(pdMS_TO_TICKS(5000));
 
   Serial.println("=== WiFi connect task FINISHED ===");
   unregister_wifi_task(this_task);
@@ -2086,6 +2471,8 @@ extern "C" void wifi_connect_click(lv_event_t *e) {
   Serial.printf("Params prepared - SSID: '%s', Pass: '%s'\n", params->ssid,
                 "***");
 
+  lv_textarea_set_text(ui_WifiPass, ""); // Limpiar campo de contraseña
+
   // Crear tarea de conexión
   if (xTaskCreate(wifi_connect_task, "WiFi Connect", 6144, params, 1, NULL) !=
       pdPASS) {
@@ -2099,91 +2486,97 @@ extern "C" void wifi_connect_click(lv_event_t *e) {
 
 // ============= WIFI CONNECTION POPUP =============
 
-// Función para mostrar el pop-up de conexión WiFi
+// Función para mostrar el pop-up de conexión WiFi - VERSIÓN SIMPLIFICADA
 void show_wifi_connect_popup(const char *ssid) {
   // Si ya existe un pop-up, cerrarlo primero
   if (wifi_popup) {
     close_wifi_popup();
   }
 
-  // Crear pop-up principal
+  // Crear pop-up principal con altura ajustada
   wifi_popup = lv_obj_create(lv_scr_act());
-  lv_obj_set_size(wifi_popup, 400, 280);
+  lv_obj_set_size(wifi_popup, 400, 280); // Más alto para evitar solapamientos
   lv_obj_center(wifi_popup);
   lv_obj_set_style_bg_color(wifi_popup, lv_color_hex(0x1a1a2e), 0);
-  lv_obj_set_style_bg_opa(wifi_popup, LV_OPA_COVER,
-                          0); // Usar LV_OPA_COVER en lugar de LV_OPA_95
+  lv_obj_set_style_bg_opa(wifi_popup, LV_OPA_COVER, 0);
   lv_obj_set_style_radius(wifi_popup, 20, 0);
   lv_obj_set_style_border_width(wifi_popup, 3, 0);
   lv_obj_set_style_border_color(wifi_popup, lv_color_hex(0x3498DB), 0);
-  lv_obj_set_style_shadow_width(wifi_popup, 30, 0);
-  lv_obj_set_style_shadow_color(wifi_popup, lv_color_hex(0x000000), 0);
-  lv_obj_set_style_shadow_opa(wifi_popup, LV_OPA_50, 0);
+  lv_obj_set_style_pad_all(wifi_popup, 15, 0); // Padding interno
+
+  // IMPORTANTE: Deshabilitar scroll
+  lv_obj_clear_flag(wifi_popup, LV_OBJ_FLAG_SCROLLABLE);
 
   // Título del pop-up
   wifi_popup_title = lv_label_create(wifi_popup);
   lv_label_set_text(wifi_popup_title, "CONECTANDO A WIFI");
-  lv_obj_set_style_text_font(wifi_popup_title, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_font(wifi_popup_title, &lv_font_montserrat_18, 0);
   lv_obj_set_style_text_color(wifi_popup_title, lv_color_white(), 0);
-  lv_obj_align(wifi_popup_title, LV_ALIGN_TOP_MID, 0, 20);
+  lv_obj_align(wifi_popup_title, LV_ALIGN_TOP_MID, 0, 10);
 
-  // SSID
-  lv_obj_t *ssid_label = lv_label_create(wifi_popup);
-  char ssid_text[80];
-  snprintf(ssid_text, sizeof(ssid_text), "Red: %s", ssid);
-  lv_label_set_text(ssid_label, ssid_text);
-  lv_obj_set_style_text_font(ssid_label, &lv_font_montserrat_16, 0);
-  lv_obj_set_style_text_color(ssid_label, lv_color_hex(0x4BC2FF), 0);
-  lv_obj_align(ssid_label, LV_ALIGN_TOP_MID, 0, 55);
+  // SSID - Posicionado claramente debajo del título
+  lv_obj_t *ssid_container = lv_obj_create(wifi_popup);
+  lv_obj_set_size(ssid_container, 360, 50); // Más alto para mejor visibilidad
+  lv_obj_align(ssid_container, LV_ALIGN_TOP_MID, 0, 45);
+  lv_obj_set_style_bg_color(ssid_container, lv_color_hex(0x16213e), 0);
+  lv_obj_set_style_bg_opa(ssid_container, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(ssid_container, 1, 0);
+  lv_obj_set_style_border_color(ssid_container, lv_color_hex(0x3498DB), 0);
+  lv_obj_set_style_radius(ssid_container, 10, 0);
+  lv_obj_set_style_pad_all(ssid_container, 10, 0);
+  lv_obj_clear_flag(ssid_container, LV_OBJ_FLAG_SCROLLABLE);
 
-  // Icono animado (arco giratorio)
+  lv_obj_t *ssid_label = lv_label_create(ssid_container);
+  lv_label_set_text(ssid_label, "Red:");
+  lv_obj_set_style_text_font(ssid_label, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(ssid_label, lv_color_hex(0xAAAAAA), 0);
+  lv_obj_align(ssid_label, LV_ALIGN_LEFT_MID, 5, 0);
+
+  lv_obj_t *ssid_value = lv_label_create(ssid_container);
+  lv_label_set_text(ssid_value, ssid);
+  lv_obj_set_style_text_font(ssid_value, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_color(ssid_value, lv_color_hex(0x4BC2FF), 0);
+  lv_obj_align_to(ssid_value, ssid_label, LV_ALIGN_OUT_RIGHT_MID, 10, 0);
+  lv_label_set_long_mode(ssid_value, LV_LABEL_LONG_SCROLL_CIRCULAR);
+  lv_obj_set_width(ssid_value, 260); // Ancho ajustado
+
+  // Icono animado (arco giratorio) - Centrado en el espacio disponible
   wifi_popup_arc = lv_arc_create(wifi_popup);
-  lv_obj_set_size(wifi_popup_arc, 80, 80);
-  lv_obj_center(wifi_popup_arc);
-  lv_obj_set_y(wifi_popup_arc, -10);
+  lv_obj_set_size(wifi_popup_arc, 70, 70);
+  lv_obj_align(wifi_popup_arc, LV_ALIGN_CENTER, 0,
+               10); // Centrado verticalmente
   lv_arc_set_bg_angles(wifi_popup_arc, 0, 360);
   lv_arc_set_angles(wifi_popup_arc, 0, 270);
   lv_obj_set_style_arc_color(wifi_popup_arc, lv_color_hex(0x3498DB),
                              LV_PART_INDICATOR);
-  lv_obj_set_style_arc_width(wifi_popup_arc, 8, LV_PART_INDICATOR);
+  lv_obj_set_style_arc_width(wifi_popup_arc, 6, LV_PART_INDICATOR);
   lv_obj_set_style_arc_color(wifi_popup_arc, lv_color_hex(0x2C3E50),
                              LV_PART_MAIN);
-  lv_obj_set_style_arc_width(wifi_popup_arc, 8, LV_PART_MAIN);
+  lv_obj_set_style_arc_width(wifi_popup_arc, 6, LV_PART_MAIN);
   lv_obj_remove_style(wifi_popup_arc, NULL, LV_PART_KNOB);
 
   // Icono WiFi dentro del arco
-  wifi_popup_icon = lv_label_create(wifi_popup);
+  wifi_popup_icon = lv_label_create(wifi_popup_arc);
   lv_label_set_text(wifi_popup_icon, LV_SYMBOL_WIFI);
-  lv_obj_set_style_text_font(wifi_popup_icon, &lv_font_montserrat_24, 0);
+  lv_obj_set_style_text_font(wifi_popup_icon, &lv_font_montserrat_20, 0);
   lv_obj_set_style_text_color(wifi_popup_icon, lv_color_white(), 0);
-  lv_obj_align_to(wifi_popup_icon, wifi_popup_arc, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_center(wifi_popup_icon);
 
-  // Mensaje de estado
+  // Mensaje de estado - Debajo del arco con espacio suficiente
   wifi_popup_message = lv_label_create(wifi_popup);
-  lv_label_set_text(wifi_popup_message, "Buscando red...");
+  lv_label_set_text(wifi_popup_message, "Conectando...");
   lv_obj_set_style_text_font(wifi_popup_message, &lv_font_montserrat_14, 0);
   lv_obj_set_style_text_color(wifi_popup_message, lv_color_hex(0xAAAAAA), 0);
-  lv_obj_align(wifi_popup_message, LV_ALIGN_CENTER, 0, 50);
-
-  // Barra de progreso
-  wifi_popup_progress = lv_bar_create(wifi_popup);
-  lv_obj_set_size(wifi_popup_progress, 300, 15);
-  lv_obj_align(wifi_popup_progress, LV_ALIGN_BOTTOM_MID, 0, -40);
-  lv_bar_set_range(wifi_popup_progress, 0, 100);
-  lv_bar_set_value(wifi_popup_progress, 0, LV_ANIM_OFF);
-  lv_obj_set_style_bg_color(wifi_popup_progress, lv_color_hex(0x2C3E50),
-                            LV_PART_MAIN);
-  lv_obj_set_style_bg_opa(wifi_popup_progress, LV_OPA_COVER, LV_PART_MAIN);
-  lv_obj_set_style_radius(wifi_popup_progress, 10, LV_PART_MAIN);
-  lv_obj_set_style_bg_color(wifi_popup_progress, lv_color_hex(0x3498DB),
-                            LV_PART_INDICATOR);
-  lv_obj_set_style_radius(wifi_popup_progress, 10, LV_PART_INDICATOR);
+  lv_obj_set_style_text_align(wifi_popup_message, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_width(wifi_popup_message, 360);
+  lv_label_set_long_mode(wifi_popup_message, LV_LABEL_LONG_WRAP);
+  lv_obj_align(wifi_popup_message, LV_ALIGN_BOTTOM_MID, 0, -15);
 
   // Timer para animación del arco
   wifi_popup_timer = lv_timer_create(
       [](lv_timer_t *timer) {
         static int angle = 0;
-        if (wifi_popup_arc) {
+        if (wifi_popup_arc && lv_obj_is_valid(wifi_popup_arc)) {
           angle += 15;
           if (angle > 360)
             angle = 0;
@@ -2192,9 +2585,8 @@ void show_wifi_connect_popup(const char *ssid) {
       },
       50, NULL);
 
-  // Animación de entrada simplificada (sin transform_scale)
+  // Animación de entrada
   lv_obj_set_style_opa(wifi_popup, 0, 0);
-
   lv_anim_t a;
   lv_anim_init(&a);
   lv_anim_set_var(&a, wifi_popup);
@@ -2208,13 +2600,8 @@ void show_wifi_connect_popup(const char *ssid) {
 
 // Función para actualizar el progreso del pop-up
 void update_wifi_popup_progress(int percent, const char *message) {
-  if (!wifi_popup)
+  if (!wifi_popup || !lv_obj_is_valid(wifi_popup))
     return;
-
-  // Actualizar barra de progreso
-  if (wifi_popup_progress && lv_obj_is_valid(wifi_popup_progress)) {
-    lv_bar_set_value(wifi_popup_progress, percent, LV_ANIM_ON);
-  }
 
   // Actualizar mensaje
   if (wifi_popup_message && lv_obj_is_valid(wifi_popup_message)) {
@@ -2222,9 +2609,9 @@ void update_wifi_popup_progress(int percent, const char *message) {
   }
 }
 
-// Función para mostrar resultado de conexión
+// Función para mostrar resultado de conexión - VERSIÓN MEJORADA
 void wifi_popup_result(bool success, const char *message) {
-  if (!wifi_popup)
+  if (!wifi_popup || !lv_obj_is_valid(wifi_popup))
     return;
 
   // Detener animación del arco
@@ -2233,78 +2620,385 @@ void wifi_popup_result(bool success, const char *message) {
     wifi_popup_timer = NULL;
   }
 
-  // Cambiar icono y color según resultado
-  if (wifi_popup_icon && lv_obj_is_valid(wifi_popup_icon)) {
+  // Ajustar tamaño del popup para el resultado
+  lv_obj_set_height(wifi_popup, 320); // Más alto para mostrar toda la info
+
+  // Cambiar título según resultado
+  if (wifi_popup_title && lv_obj_is_valid(wifi_popup_title)) {
+    lv_label_set_text(wifi_popup_title,
+                      success ? "CONEXION EXITOSA" : "ERROR DE CONEXION");
+    lv_obj_set_style_text_color(
+        wifi_popup_title,
+        success ? lv_color_hex(0x27AE60) : lv_color_hex(0xE74C3C), 0);
+  }
+
+  // Cambiar icono y arco
+  if (wifi_popup_icon && lv_obj_is_valid(wifi_popup_icon) && wifi_popup_arc &&
+      lv_obj_is_valid(wifi_popup_arc)) {
+
+    // Mover arco más arriba para dar espacio al mensaje
+    lv_obj_align(wifi_popup_arc, LV_ALIGN_TOP_MID, 0, 110);
+
     if (success) {
       lv_label_set_text(wifi_popup_icon, LV_SYMBOL_OK);
       lv_obj_set_style_text_color(wifi_popup_icon, lv_color_hex(0x27AE60), 0);
-      if (wifi_popup_arc) {
-        lv_obj_set_style_arc_color(wifi_popup_arc, lv_color_hex(0x27AE60),
-                                   LV_PART_INDICATOR);
-        lv_arc_set_angles(wifi_popup_arc, 0, 360);
-      }
+      lv_obj_set_style_arc_color(wifi_popup_arc, lv_color_hex(0x27AE60),
+                                 LV_PART_INDICATOR);
+      lv_arc_set_angles(wifi_popup_arc, 0, 360);
     } else {
       lv_label_set_text(wifi_popup_icon, LV_SYMBOL_CLOSE);
       lv_obj_set_style_text_color(wifi_popup_icon, lv_color_hex(0xE74C3C), 0);
-      if (wifi_popup_arc) {
-        lv_obj_set_style_arc_color(wifi_popup_arc, lv_color_hex(0xE74C3C),
-                                   LV_PART_INDICATOR);
-        lv_arc_set_angles(wifi_popup_arc, 0, 360);
-      }
+      lv_obj_set_style_arc_color(wifi_popup_arc, lv_color_hex(0xE74C3C),
+                                 LV_PART_INDICATOR);
+      lv_arc_set_angles(wifi_popup_arc, 0, 360);
     }
   }
 
-  // Actualizar mensaje
+  // Actualizar mensaje - FORMATEADO CORRECTAMENTE
   if (wifi_popup_message && lv_obj_is_valid(wifi_popup_message)) {
-    lv_label_set_text(wifi_popup_message, message);
-  }
+    // Reposicionar el mensaje debajo del arco con suficiente espacio
+    lv_obj_align(wifi_popup_message, LV_ALIGN_BOTTOM_MID, 0, -60);
+    lv_obj_set_width(wifi_popup_message, 360);
+    lv_label_set_long_mode(wifi_popup_message, LV_LABEL_LONG_WRAP);
 
-  // Completar barra de progreso
-  if (wifi_popup_progress && lv_obj_is_valid(wifi_popup_progress)) {
-    lv_bar_set_value(wifi_popup_progress, success ? 100 : 0, LV_ANIM_ON);
-    lv_obj_set_style_bg_color(wifi_popup_progress,
-                              success ? lv_color_hex(0x27AE60)
-                                      : lv_color_hex(0xE74C3C),
-                              LV_PART_INDICATOR);
-  }
+    if (success) {
+      // Extraer información relevante del mensaje
+      char simplified_msg[256] = "";
 
-  // Añadir botón de cerrar
-  lv_obj_t *close_btn = lv_btn_create(wifi_popup);
-  lv_obj_set_size(close_btn, 120, 40);
-  lv_obj_align(close_btn, LV_ALIGN_BOTTOM_MID, 0, -15);
-  lv_obj_set_style_bg_color(close_btn, lv_color_hex(0x404040), 0);
+      // Buscar IP en el mensaje
+      const char *ip_start = strstr(message, "IP:");
+      if (ip_start) {
+        char ip[32] = "";
+        const char *ip_end = strchr(ip_start + 4, '\n');
+        int ip_len = ip_end ? (ip_end - (ip_start + 4)) : strlen(ip_start + 4);
+        if (ip_len > 0 && ip_len < 32) {
+          strncpy(ip, ip_start + 4, ip_len);
+          ip[ip_len] = '\0';
 
-  // Crear callback estático para el botón
-  static lv_event_cb_t close_cb = [](lv_event_t *e) {
-    if (e->code == LV_EVENT_CLICKED) {
-      close_wifi_popup();
+          // Eliminar espacios
+          char *p = ip;
+          while (*p && *p == ' ')
+            p++;
+
+          snprintf(simplified_msg, sizeof(simplified_msg),
+                   "Conexion establecida\n\n"
+                   "IP: %s",
+                   p);
+        }
+      } else {
+        strcpy(simplified_msg, "Conexion establecida");
+      }
+
+      lv_label_set_text(wifi_popup_message, simplified_msg);
+      lv_obj_set_style_text_color(wifi_popup_message, lv_color_hex(0x27AE60),
+                                  0);
+
+    } else {
+      // Para errores, mensaje conciso
+      char error_msg[128];
+
+      // Extraer razón del error si existe
+      const char *reason_start = strstr(message, "Razon:");
+      if (reason_start) {
+        const char *reason_end = strchr(reason_start, '\n');
+        int reason_len = reason_end ? (reason_end - (reason_start + 7)) : 30;
+        if (reason_len > 60)
+          reason_len = 60;
+
+        char reason[64] = "";
+        strncpy(reason, reason_start + 7, reason_len);
+        reason[reason_len] = '\0';
+
+        snprintf(error_msg, sizeof(error_msg),
+                 "No se pudo conectar\n\n%s\n\nVerify the password", reason);
+      } else {
+        strcpy(error_msg,
+               "No se pudo conectar\n\nVerify:\n• Password\n• WiFi Signal");
+      }
+
+      lv_label_set_text(wifi_popup_message, error_msg);
+      lv_obj_set_style_text_color(wifi_popup_message, lv_color_hex(0xE74C3C),
+                                  0);
     }
-  };
 
-  lv_obj_add_event_cb(close_btn, close_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_set_style_text_font(wifi_popup_message, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_align(wifi_popup_message, LV_TEXT_ALIGN_CENTER, 0);
+  }
+
+  // Botón de cerrar - Posicionado claramente en la parte inferior
+  lv_obj_t *close_btn = lv_btn_create(wifi_popup);
+  lv_obj_set_size(close_btn, 140, 40);
+  lv_obj_align(close_btn, LV_ALIGN_BOTTOM_MID, 0, -10);
+  lv_obj_set_style_bg_color(
+      close_btn, success ? lv_color_hex(0x27AE60) : lv_color_hex(0xE74C3C), 0);
+  lv_obj_set_style_radius(close_btn, 10, 0);
+
+  lv_obj_add_event_cb(
+      close_btn,
+      [](lv_event_t *e) {
+        if (e->code == LV_EVENT_CLICKED) {
+          close_wifi_popup();
+        }
+      },
+      LV_EVENT_CLICKED, NULL);
 
   lv_obj_t *close_label = lv_label_create(close_btn);
   lv_label_set_text(close_label, success ? "CONTINUAR" : "CERRAR");
   lv_obj_center(close_label);
+  lv_obj_set_style_text_color(close_label, lv_color_white(), 0);
+  lv_obj_set_style_text_font(close_label, &lv_font_montserrat_14, 0);
 
-  // Auto-cerrar después de 5 segundos si es éxito
+  // Auto-cerrar después de 6 segundos si es éxito
   if (success) {
-    static lv_timer_cb_t auto_close_cb = [](lv_timer_t *timer) {
-      close_wifi_popup();
-      lv_timer_del(timer);
-    };
-
-    lv_timer_t *auto_close_timer = lv_timer_create(auto_close_cb, 5000, NULL);
+    lv_timer_t *auto_close_timer = lv_timer_create(
+        [](lv_timer_t *timer) {
+          close_wifi_popup();
+          lv_timer_del(timer);
+        },
+        6000, NULL);
     lv_timer_set_repeat_count(auto_close_timer, 1);
   }
 }
 
-// Función para cerrar el pop-up
+// ============= WIFI SCAN POPUP =============
+
+// Función para mostrar pop-up de escaneo WiFi - VERSIÓN MEJORADA
+void show_wifi_scan_popup(void) {
+  Serial.println("Mostrando pop-up de escaneo WiFi...");
+
+  // Crear mutex si no existe
+  if (!scan_popup_mutex) {
+    scan_popup_mutex = xSemaphoreCreateMutex();
+  }
+
+  // Tomar mutex antes de crear
+  if (xSemaphoreTake(scan_popup_mutex, pdMS_TO_TICKS(100))) {
+    // Si ya existe un pop-up, cerrarlo primero
+    if (scan_popup) {
+      close_wifi_scan_popup();
+      vTaskDelay(50 / portTICK_PERIOD_MS);
+    }
+
+    // Marcar como no listo
+    scan_popup_ready = false;
+
+    // Crear pop-up de escaneo con dimensiones ajustadas
+    scan_popup = lv_obj_create(lv_scr_act());
+    lv_obj_set_size(scan_popup, 380, 240); // Más alto para evitar solapamiento
+    lv_obj_center(scan_popup);
+    lv_obj_set_style_bg_color(scan_popup, lv_color_hex(0x1a1a2e), 0);
+    lv_obj_set_style_bg_opa(scan_popup, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(scan_popup, 20, 0);
+    lv_obj_set_style_border_width(scan_popup, 3, 0);
+    lv_obj_set_style_border_color(scan_popup, lv_color_hex(0xF39C12), 0);
+    lv_obj_set_style_pad_all(scan_popup, 15, 0);
+
+    // IMPORTANTE: Deshabilitar scroll
+    lv_obj_clear_flag(scan_popup, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Título - Bien posicionado arriba
+    scan_popup_title = lv_label_create(scan_popup);
+    lv_label_set_text(scan_popup_title, "BUSCANDO REDES");
+    lv_obj_set_style_text_font(scan_popup_title, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(scan_popup_title, lv_color_hex(0xF39C12), 0);
+    lv_obj_align(scan_popup_title, LV_ALIGN_TOP_MID, 0, 10);
+
+    // Subtítulo - Debajo del título con espacio
+    lv_obj_t *subtitle = lv_label_create(scan_popup);
+    lv_label_set_text(subtitle, "Escaneando redes WiFi...");
+    lv_obj_set_style_text_font(subtitle, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(subtitle, lv_color_hex(0xAAAAAA), 0);
+    lv_obj_align(subtitle, LV_ALIGN_TOP_MID, 0, 40);
+
+    // Icono WiFi animado - Centrado en el espacio medio
+    scan_popup_arc = lv_arc_create(scan_popup);
+    lv_obj_set_size(scan_popup_arc, 90, 90);
+    lv_obj_align(scan_popup_arc, LV_ALIGN_CENTER, 0,
+                 10); // Centrado verticalmente
+    lv_arc_set_bg_angles(scan_popup_arc, 0, 360);
+    lv_arc_set_angles(scan_popup_arc, 0, 180);
+    lv_obj_set_style_arc_color(scan_popup_arc, lv_color_hex(0xF39C12),
+                               LV_PART_INDICATOR);
+    lv_obj_set_style_arc_width(scan_popup_arc, 8, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(scan_popup_arc, lv_color_hex(0x7D6608),
+                               LV_PART_MAIN);
+    lv_obj_set_style_arc_width(scan_popup_arc, 8, LV_PART_MAIN);
+    lv_obj_remove_style(scan_popup_arc, NULL, LV_PART_KNOB);
+
+    // Icono WiFi dentro del arco
+    scan_popup_icon = lv_label_create(scan_popup_arc);
+    lv_label_set_text(scan_popup_icon, LV_SYMBOL_WIFI);
+    lv_obj_set_style_text_font(scan_popup_icon, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(scan_popup_icon, lv_color_hex(0xF39C12), 0);
+    lv_obj_center(scan_popup_icon);
+
+    // Contador de redes - Debajo del arco con espacio suficiente
+    scan_popup_message = lv_label_create(scan_popup);
+    lv_label_set_text(scan_popup_message, "Redes encontradas: 0");
+    lv_obj_set_style_text_font(scan_popup_message, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(scan_popup_message, lv_color_hex(0x4BC2FF), 0);
+    lv_obj_set_style_text_align(scan_popup_message, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(scan_popup_message, LV_ALIGN_BOTTOM_MID, 0,
+                 -15); // Abajo del todo
+
+    // Timer para animación del escaneo (radar)
+    scan_popup_timer = lv_timer_create(
+        [](lv_timer_t *timer) {
+          static int angle = 0;
+          static int direction = 1;
+
+          if (scan_popup_arc && lv_obj_is_valid(scan_popup_arc)) {
+            angle += direction * 15;
+
+            if (angle >= 270) {
+              angle = 270;
+              direction = -1;
+            } else if (angle <= 0) {
+              angle = 0;
+              direction = 1;
+            }
+
+            lv_arc_set_angles(scan_popup_arc, angle, angle + 90);
+          }
+        },
+        80, NULL);
+
+    // Animación de entrada
+    lv_obj_set_style_opa(scan_popup, 0, 0);
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, scan_popup);
+    lv_anim_set_values(&a, 0, 255);
+    lv_anim_set_time(&a, 300);
+    lv_anim_set_exec_cb(&a, [](void *obj, int32_t v) {
+      lv_obj_set_style_opa((lv_obj_t *)obj, v, 0);
+    });
+
+    // Cuando termine la animación, marcar como listo
+    lv_anim_set_ready_cb(&a, [](lv_anim_t *a) {
+      scan_popup_ready = true;
+      Serial.println("Pop-up de escaneo listo y visible");
+    });
+
+    lv_anim_start(&a);
+
+    // Liberar mutex
+    xSemaphoreGive(scan_popup_mutex);
+  } else {
+    Serial.println("ERROR: No se pudo obtener mutex para crear pop-up");
+  }
+
+  Serial.println("Pop-up de escaneo creado");
+}
+
+// Función para actualizar el pop-up de escaneo - SIN CAMBIOS (ya está bien)
+void update_scan_popup(int network_count) {
+  // Verificar si el pop-up está listo
+  if (!scan_popup_ready) {
+    Serial.printf("DEBUG: Pop-up no está listo aún, esperando...\n");
+
+    unsigned long start = millis();
+    while (!scan_popup_ready && (millis() - start) < 500) {
+      vTaskDelay(10 / portTICK_PERIOD_MS);
+    }
+
+    if (!scan_popup_ready) {
+      Serial.printf("ERROR: Timeout esperando pop-up. Count=%d\n",
+                    network_count);
+      return;
+    }
+  }
+
+  // Tomar mutex para actualización segura
+  if (scan_popup_mutex &&
+      xSemaphoreTake(scan_popup_mutex, pdMS_TO_TICKS(100))) {
+    if (!scan_popup || !lv_obj_is_valid(scan_popup)) {
+      Serial.println("ERROR: scan_popup es NULL o inválido");
+      xSemaphoreGive(scan_popup_mutex);
+      return;
+    }
+
+    Serial.printf("Actualizando pop-up de escaneo: %d redes\n", network_count);
+
+    // Actualizar contador
+    if (scan_popup_message && lv_obj_is_valid(scan_popup_message)) {
+      char counter_text[48];
+      snprintf(counter_text, sizeof(counter_text), "Redes encontradas: %d",
+               network_count);
+      lv_label_set_text(scan_popup_message, counter_text);
+      lv_obj_invalidate(scan_popup_message);
+    }
+
+    xSemaphoreGive(scan_popup_mutex);
+  } else {
+    Serial.println("WARNING: No se pudo obtener mutex para actualizar pop-up");
+  }
+}
+
+// Función para cerrar el pop-up de escaneo
+void close_wifi_scan_popup(void) {
+  if (!scan_popup)
+    return;
+
+  // Marcar como no listo
+  scan_popup_ready = false;
+
+  // Tomar mutex
+  if (scan_popup_mutex &&
+      !xSemaphoreTake(scan_popup_mutex, pdMS_TO_TICKS(100))) {
+    Serial.println("WARNING: No se pudo obtener mutex para cerrar pop-up");
+    return;
+  }
+
+  // Detener timer de animación
+  if (scan_popup_timer) {
+    lv_timer_del(scan_popup_timer);
+    scan_popup_timer = NULL;
+  }
+
+  // Animación de salida
+  lv_anim_t a;
+  lv_anim_init(&a);
+  lv_anim_set_var(&a, scan_popup);
+  lv_anim_set_values(&a, 255, 0);
+  lv_anim_set_time(&a, 200);
+  lv_anim_set_exec_cb(&a, [](void *obj, int32_t v) {
+    lv_obj_set_style_opa((lv_obj_t *)obj, v, 0);
+  });
+
+  // Callback para limpiar
+  lv_anim_set_ready_cb(&a, [](lv_anim_t *a) {
+    if (scan_popup) {
+      lv_obj_del(scan_popup);
+      scan_popup = NULL;
+      scan_popup_title = NULL;
+      scan_popup_icon = NULL;
+      scan_popup_message = NULL;
+      scan_popup_arc = NULL;
+    }
+
+    if (scan_popup_mutex) {
+      xSemaphoreGive(scan_popup_mutex);
+    }
+  });
+
+  lv_anim_start(&a);
+
+  Serial.println("Pop-up de escaneo cerrado");
+}
+
+// Función para cerrar el pop-up de conexión
 void close_wifi_popup(void) {
   if (!wifi_popup)
     return;
 
-  // Animación de salida simplificada
+  // Detener timer de animación
+  if (wifi_popup_timer) {
+    lv_timer_del(wifi_popup_timer);
+    wifi_popup_timer = NULL;
+  }
+
+  // Animación de salida
   lv_anim_t a;
   lv_anim_init(&a);
   lv_anim_set_var(&a, wifi_popup);
@@ -2314,20 +3008,16 @@ void close_wifi_popup(void) {
     lv_obj_set_style_opa((lv_obj_t *)obj, v, 0);
   });
 
-  // Crear callback estático para limpiar
-  static lv_anim_ready_cb_t cleanup_cb = [](lv_anim_t *a) {
-    if (wifi_popup_timer) {
-      lv_timer_del(wifi_popup_timer);
-      wifi_popup_timer = NULL;
-    }
+  // Callback para limpiar
+  lv_anim_set_ready_cb(&a, [](lv_anim_t *a) {
     lv_obj_del(wifi_popup);
     wifi_popup = NULL;
+    wifi_popup_title = NULL;
     wifi_popup_icon = NULL;
     wifi_popup_message = NULL;
     wifi_popup_progress = NULL;
     wifi_popup_arc = NULL;
-  };
+  });
 
-  lv_anim_set_ready_cb(&a, cleanup_cb);
   lv_anim_start(&a);
 }
